@@ -1,0 +1,19 @@
+{
+  "name": "chancetime-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chance Time Tauri 2 desktop shell",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-opener": "^2.5.4"
+  }
+}

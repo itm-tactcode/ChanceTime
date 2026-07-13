@@ -1,0 +1,89 @@
+# Micro live config — Phase 6. REAL MONEY when PAPER_MODE=false.
+# Use only with: chancetime live-smoke / run --live --i-understand-this-spends-real-money
+#
+# Caps: ~$5/order, $20/session, few positions. Strategies minimal.
+
+bot:
+  name: "chance-time-live-micro"
+  paper_mode: false  # env PAPER_MODE still overrides if set
+  poll_interval_seconds: 60
+
+risk:
+  max_position_usd: 5.0
+  max_daily_loss_usd: 15.0
+  max_open_positions: 4
+  max_consecutive_errors: 3
+  take_profit_pct: 0.30
+  stop_loss_pct: 0.25
+
+llm:
+  enabled: false  # no LLM spend during first live tests
+  model: "grok-4.5"
+  daily_budget_usd: 1.0
+  max_tokens: 256
+  call_on_every_poll: false
+  post_trade_review: false
+
+data:
+  source: both
+  max_markets: 40
+
+strategies:
+  simple_edge:
+    enabled: false  # disable directional spam for first live
+    edge_threshold: 0.12
+    min_liquidity_usd: 500.0
+    weight: 0.5
+  llm_calibrated:
+    enabled: false
+  arb_cross:
+    enabled: false  # enable only after single-venue smoke works
+    min_spread: 0.06
+    fee_buffer: 0.03
+    min_match_score: 0.80
+    min_liquidity_usd: 100.0
+    emit_hedge_legs: true
+    require_bbo: true
+    use_executable_prices: true
+    size_by_depth: true
+    max_leg_usd: 5.0
+    max_pair_usd: 10.0
+    min_depth_usd: 5.0
+    weight: 1.0
+    use_llm_match: false
+
+execution:
+  paper_slippage_bps: 50
+  default_order_size_usd: 5.0
+  max_arb_pairs_per_poll: 1
+  max_arb_pair_usd: 10.0
+  max_arb_notional_per_poll: 10.0
+  max_leg_usd: 5.0
+  max_position_usd_hard: 5.0
+  require_both_arb_legs: true
+  live_enabled: true
+  max_live_order_usd: 5.0
+  min_live_order_usd: 1.0
+  max_live_orders_session: 4
+  max_live_notional_session: 20.0
+  live_tif_kalshi: immediate_or_cancel
+  live_tif_polymarket: TIME_IN_FORCE_IMMEDIATE_OR_CANCEL
+
+persistence:
+  enabled: true
+  # Separate file from paper so Monitor paper/live tabs never mix books
+  db_path: data/live.db
+  cash_basis_usd: 140.0
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8787
+  paper_db_path: data/paper.db
+  live_db_path: data/live.db
+
+alerts:
+  telegram_enabled: false
+
+logging:
+  level: INFO
+  json_logs: false

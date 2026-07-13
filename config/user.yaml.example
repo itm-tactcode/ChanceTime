@@ -1,0 +1,34 @@
+# Copy to config/user.yaml (gitignored) for personal non-secret overrides.
+# Desktop Settings tab / `chancetime user-config apply` / POST /api/user-config write here.
+# Never put API keys in this file.
+#
+#   cp config/user.yaml.example config/user.yaml
+#
+# Merge order: --config path  <  config/user.yaml  <  secrets in .env
+
+bot:
+  poll_interval_seconds: 30
+  # shadow_mode: true   # signals only, no fills
+
+# data:
+#   source: mock   # mock | kalshi | polymarket | both
+
+# risk:
+#   max_position_usd: 50.0
+#   max_daily_loss_usd: 25.0
+#   max_open_positions: 10
+#   max_family_exposure_usd: 100.0
+
+# execution:
+#   default_order_size_usd: 10.0
+
+# llm:
+#   enabled: true
+#   daily_budget_usd: 5.0
+
+# strategies:
+#   mean_revert:
+#     enabled: true
+#     weight: 1.0
+#   ml_edge:
+#     enabled: true

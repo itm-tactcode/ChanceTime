@@ -1,0 +1,111 @@
+[project]
+name = "chancetime"
+version = "0.1.0"
+description = "Chance Time — paper-first prediction-market bot (Kalshi/Polymarket) with Grok LLM intelligence"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Chance Time Contributors" }]
+dependencies = [
+    "aiohttp>=3.10.0",
+    "cryptography>=49.0.0",
+    "numpy>=2.0.0",
+    "openai>=1.50.0",
+    "pandas>=2.2.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.0",
+    "structlog>=24.4.0",
+    "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+# Kept for pip install -e ".[dev]"
+dev = [
+    "hypothesis>=6.112.0",
+    "mypy>=1.11.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.6.0",
+    "types-PyYAML>=6.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.27.0",
+]
+# Official xAI SDK when available; openai client works against api.x.ai as fallback
+xai = ["xai-sdk>=1.0.0"]
+# Local status dashboard (FastAPI + uvicorn)
+dashboard = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+]
+# Classical ML strategies (later) — keep out of core; prefer sklearn before torch
+ml = [
+    "scikit-learn>=1.5.0",
+    "joblib>=1.4.0",
+]
+
+# uv-native dev group (preferred): `uv sync --group dev` or `uv sync --all-groups`
+[dependency-groups]
+dev = [
+    "hypothesis>=6.112.0",
+    "mypy>=1.11.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.6.0",
+    "types-PyYAML>=6.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+chancetime = "chancetime.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# src/ layout: package name chancetime is auto-discovered under src/
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Embedded HTML/JS dashboard template
+"src/chancetime/dashboard/app.py" = ["E501"]
+# CLI help strings and long typer Option text
+"src/chancetime/cli/*.py" = ["E501", "SIM118"]
+# sqlite3.Row requires .keys() (iterating the row yields values)
+"src/chancetime/persistence/store.py" = ["SIM118"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["chancetime"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["xai_sdk.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["uvicorn.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["joblib.*", "sklearn.*"]
+ignore_missing_imports = true

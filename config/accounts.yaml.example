@@ -1,0 +1,30 @@
+# Multi-account / multi-book registry (Phase 11).
+# Copy to config/accounts.yaml (gitignored optional) or keep as example and pass paths.
+#
+#   cp config/accounts.yaml.example config/accounts.yaml
+#
+# CLI:
+#   chancetime accounts
+#   chancetime run --account paper
+#   chancetime digest --account live --send
+#   chancetime export --account paper --year 2026
+
+accounts:
+  paper:
+    label: "Paper main"
+    db_path: data/paper.db
+    paper_mode: true
+    # optional base config (merged before user.yaml)
+    # config: config/default.yaml
+
+  live:
+    label: "Live micro"
+    db_path: data/live.db
+    paper_mode: false
+    config: config/live_micro.yaml
+
+  paper_bag:
+    label: "Paper strategy bag"
+    db_path: data/paper_bag.db
+    paper_mode: true
+    config: config/paper_bag.yaml

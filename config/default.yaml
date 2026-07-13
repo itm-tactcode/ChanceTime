@@ -1,0 +1,214 @@
+# Default bot configuration (non-secret). Secrets live in .env only.
+
+bot:
+  name: "chance-time"
+  paper_mode: true  # env PAPER_MODE overrides
+  poll_interval_seconds: 30
+  # Phase 9: signals + risk only — no paper/live fills
+  shadow_mode: false
+  # Phase 19: re-read risk + strategy caps/weights from YAML each poll (no restart)
+  hot_reload_risk: false
+
+risk:
+  max_position_usd: 50.0
+  max_daily_loss_usd: 25.0
+  max_open_positions: 10
+  max_consecutive_errors: 5
+  # Exit rules as fraction of entry size (null to disable)
+  take_profit_pct: 0.30
+  stop_loss_pct: 0.25
+  # Cap notional open per event family (sports/macro/crypto/politics/other)
+  max_family_exposure_usd: 100.0
+  # Phase 19: tighter same-series cluster (0 = off)
+  max_cluster_exposure_usd: 75.0
+  # Phase 19: max fraction of cash_basis in open positions (0 = off)
+  max_deploy_pct: 0.70
+  # Phase 19: time-to-event (0 = off)
+  min_hours_to_close: 0.0
+  max_days_to_close: 0.0
+  # Auto-skip strategies with enough fills and bad cumulative PnL (0 fills = off)
+  cold_min_fills: 5
+  cold_max_realized_pnl: -10.0
+  # Never approve more notional than free cash (paper mirrors live reject)
+  enforce_cash: true
+  min_order_usd: 1.0
+  # Risk-layer mid band (0 / 1 = off). Blocks lottery tickets at approval time.
+  min_yes_mid: 0.03
+  max_yes_mid: 0.97
+  # Cost-aware: require |edge| - assumed_half_spread - assumed_fee >= min_net_edge
+  min_net_edge: 0.02
+  assumed_half_spread: 0.005
+  assumed_fee: 0.0
+  # Cap open positions per strategy (0 = unlimited). Stops simple_edge monopoly.
+  max_open_per_strategy: 8
+  # Reject when BBO spread wider than this (0 = off)
+  max_spread: 0.06
+
+llm:
+  enabled: true
+  model: "grok-4.5"
+  daily_budget_usd: 5.0
+  max_tokens: 512
+  call_on_every_poll: false
+  # grok-4.5 list prices (NOT fast-tier $0.20/$0.50 — undercount burns real $)
+  price_input_per_1m: 2.0
+  price_output_per_1m: 6.0
+  cache_ttl_seconds: 3600
+  cache_dir: llm_cache
+  post_trade_review: true
+  # Re-call Grok if mid moves by this much since last calibrate
+  price_move_bust: 0.05
+  # Optional news blurbs (or path to a text file)
+  news_context: ""
+  news_context_file: ""
+  # Tools OFF by default for continuous paper bots (100k–400k tokens/call)
+  tools_enabled: false
+  web_search: false
+  x_search: false
+  calibrate_with_tools: false
+  cache_when_tools: false
+  tools_reserve_input_tokens: 80000
+  max_input_tokens_per_call: 100000
+  # Hard daily cap on tool/search (shared; not per-poll)
+  max_tool_calls_per_day: 4
+  news_brief_enabled: true
+  news_brief_max_pulls_per_day: 4
+  news_brief_min_hours_between: 4.0
+
+data:
+  # mock | kalshi | polymarket (Polymarket US) | both (Kalshi+PM US composite)
+  source: mock
+  # Per-venue cap when not using scan-arb --deep
+  max_markets: 100
+  # Dual-venue discovery every N polls when source=both + arb_cross (0=off)
+  discovery_every_polls: 5
+  discovery_limit: 150
+
+# Phase 10: append market/BBO snapshots each poll (JSONL under data/history/)
+history:
+  enabled: false
+  directory: data/history
+  filename: ""  # empty → markets-YYYYMMDD.jsonl
+
+strategies:
+  simple_edge:
+    enabled: true
+    edge_threshold: 0.08
+    min_liquidity_usd: 100.0
+    default_fair_prob: 0.5
+    # Phase 18: blend preferred over static 0.5 (research: prior_mode: static)
+    prior_mode: blend
+    blend_alpha: 0.5
+    history_window: 5
+    min_history: 3
+    weight: 1.0
+  llm_calibrated:
+    enabled: false
+    edge_threshold: 0.10
+    min_liquidity_usd: 100.0
+    min_confidence: 0.45
+    min_confidence_no_tools: 0.55
+    screen_threshold: 0.05
+    max_llm_calls_per_poll: 2
+    weight: 1.0
+  # Cross-venue Kalshi ↔ Polymarket US (needs dual-listed markets in feed)
+  arb_cross:
+    enabled: true
+    min_spread: 0.04
+    fee_buffer: 0.03
+    min_match_score: 0.65
+    # 0 = ignore unknown OI; only filter when venue reports depth/volume
+    min_liquidity_usd: 0.0
+    emit_hedge_legs: true
+    weight: 1.0
+    # Optional manual aliases + auto file config/arb_aliases.json
+    aliases: {}
+    # Mid-band LLM: fuzzy >= min_match_score auto; [band_low, min) → tiny yes/no
+    use_llm_match: false
+    llm_match_band_low: 0.40
+    llm_match_min_confidence: 0.75
+    llm_match_max_each: 24
+    llm_bulk_fallback: false
+    # Phase 18: require BBO for executable arb
+    require_bbo: true
+    use_executable_prices: true
+    size_by_depth: true
+    max_leg_usd: 25.0
+    max_pair_usd: 40.0
+    min_depth_usd: 5.0
+    # Dual search + series map so real same-event pairs enter the book
+    deep_discovery: true
+  # Fade short-horizon mid spikes (needs multi-poll history)
+  mean_revert:
+    enabled: false
+    move_threshold: 0.06
+    min_liquidity_usd: 100.0
+    history_window: 8
+    min_history: 3
+    weight: 1.0
+  # LLM + news_context only (set llm.news_context or news_context_file)
+  news_impulse:
+    enabled: false
+    edge_threshold: 0.06
+    min_liquidity_usd: 100.0
+    min_confidence: 0.4
+    max_llm_calls_per_poll: 2
+    news_context: ""
+    weight: 1.0
+  # Offline sklearn model (models/ml_edge.joblib); uv sync --extra ml
+  ml_edge:
+    enabled: false
+    model_path: models/ml_edge.joblib
+    edge_threshold: 0.05
+    min_liquidity_usd: 100.0
+    weight: 1.0
+
+execution:
+  paper_slippage_bps: 50
+  default_order_size_usd: 10.0
+  # Phase 17 paper realism
+  use_bbo_paper: true
+  paper_fee_bps: 70
+  paper_fee_venue: default  # default|kalshi|polymarket|mock
+  max_spread: 0.06
+  size_by_depth: true
+  min_depth_usd: 5.0
+  liquidity_participation: 0.25
+  min_fill_ratio: 0.25
+  # Dual-leg paper arb: both legs or neither
+  max_arb_pairs_per_poll: 3
+  max_arb_pair_usd: 40.0
+  max_arb_notional_per_poll: 100.0
+  max_leg_usd: 25.0
+  max_position_usd_hard: 50.0
+  require_both_arb_legs: true
+  # Phase 6 live (also requires --i-understand-this-spends-real-money)
+  live_enabled: false
+  max_live_order_usd: 5.0
+  min_live_order_usd: 1.0
+  max_live_orders_session: 4
+  max_live_notional_session: 20.0
+  live_tif_kalshi: immediate_or_cancel
+  live_tif_polymarket: TIME_IN_FORCE_IMMEDIATE_OR_CANCEL
+  dual_leg_live_enabled: true
+
+alerts:
+  # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env enable Telegram
+  telegram_enabled: false
+
+# Local SQLite book (portfolio / fills / equity). Path relative to project root.
+# Paper bot writes here; live configs should use data/live.db (see live_micro.yaml).
+persistence:
+  enabled: true
+  db_path: data/paper.db
+  cash_basis_usd: 1000.0
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8787
+  paper_db_path: data/paper.db
+  live_db_path: data/live.db
+
+logging:
+  level: INFO
+  json_logs: false

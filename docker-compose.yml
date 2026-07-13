@@ -1,0 +1,66 @@
+# Chance Time local stack (paper mode). Do not commit real secrets.
+#
+#   docker compose run --rm bot
+#   docker compose --profile ui up dashboard
+#   docker compose --profile loop up bot-loop
+
+services:
+  bot:
+    build: .
+    image: chancetime:local
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PAPER_MODE: "true"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./llm_cache:/app/llm_cache
+      - ./secrets:/app/secrets:ro
+      - ./config:/app/config:ro
+    command: ["chancetime", "run", "--max-polls", "10"]
+    restart: "no"
+
+  bot-loop:
+    build: .
+    image: chancetime:local
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PAPER_MODE: "true"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./llm_cache:/app/llm_cache
+      - ./secrets:/app/secrets:ro
+      - ./config:/app/config:ro
+    command: ["chancetime", "run"]
+    profiles: ["loop"]
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    image: chancetime:local
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    environment:
+      PAPER_MODE: "true"
+    command:
+      [
+        "chancetime",
+        "dashboard",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8787",
+        "--paper-db",
+        "data/paper.db",
+        "--live-db",
+        "data/live.db",
+      ]
+    profiles: ["ui"]

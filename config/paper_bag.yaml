@@ -1,0 +1,99 @@
+# Paper multi-strategy bag (Phase 7/8 experiments). No real orders.
+#
+#   uv run chancetime run -c config/paper_bag.yaml --fresh-db --max-polls 8
+#   uv run chancetime strategies -c config/paper_bag.yaml --stats
+#
+# Prefer poll interval here or config/user.yaml — not .env (legacy env still wins if set).
+
+bot:
+  name: "chance-time-paper-bag"
+  paper_mode: true
+  poll_interval_seconds: 1
+
+risk:
+  max_position_usd: 25.0
+  max_daily_loss_usd: 50.0
+  max_open_positions: 12
+  max_consecutive_errors: 5
+  take_profit_pct: 0.30
+  stop_loss_pct: 0.25
+
+llm:
+  enabled: false
+  model: "grok-4.5"
+  daily_budget_usd: 1.0
+  max_tokens: 256
+  call_on_every_poll: false
+  post_trade_review: false
+
+data:
+  source: mock
+  max_markets: 20
+
+strategies:
+  simple_edge:
+    enabled: true
+    edge_threshold: 0.08
+    min_liquidity_usd: 100.0
+    default_fair_prob: 0.5
+    prior_mode: static
+    weight: 0.8
+  llm_calibrated:
+    enabled: false
+  arb_cross:
+    enabled: true
+    min_spread: 0.04
+    fee_buffer: 0.02
+    min_match_score: 0.65
+    min_liquidity_usd: 0.0
+    emit_hedge_legs: true
+    weight: 1.0
+    require_bbo: false
+    use_executable_prices: true
+    size_by_depth: true
+    max_leg_usd: 15.0
+    max_pair_usd: 30.0
+    min_depth_usd: 5.0
+  mean_revert:
+    enabled: true
+    move_threshold: 0.05
+    min_liquidity_usd: 100.0
+    history_window: 8
+    min_history: 3
+    weight: 1.0
+  news_impulse:
+    enabled: false
+  ml_edge:
+    enabled: true
+    model_path: models/ml_edge.joblib
+    edge_threshold: 0.05
+    min_liquidity_usd: 100.0
+    weight: 0.6
+
+execution:
+  paper_slippage_bps: 50
+  default_order_size_usd: 10.0
+  max_arb_pairs_per_poll: 2
+  max_arb_pair_usd: 30.0
+  max_arb_notional_per_poll: 60.0
+  max_leg_usd: 15.0
+  max_position_usd_hard: 25.0
+  require_both_arb_legs: true
+  live_enabled: false
+
+persistence:
+  enabled: true
+  # Separate paper book so live sync positions aren't mixed in
+  db_path: data/paper_bag.db
+  cash_basis_usd: 1000.0
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8787
+
+alerts:
+  telegram_enabled: false
+
+logging:
+  level: INFO
+  json_logs: false

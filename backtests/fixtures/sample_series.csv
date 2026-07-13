@@ -1,0 +1,19 @@
+ts,market_id,yes_price,liquidity_usd,title,platform,resolve
+2024-01-01T00:00:00Z,fed-cut,0.42,5000,Will Fed cut next meeting?,fixture,
+2024-01-01T00:00:00Z,btc-100k,0.61,8000,BTC above 100k by year end?,fixture,
+2024-01-01T00:00:00Z,turnout,0.33,2000,Turnout above 50%?,fixture,
+2024-01-02T00:00:00Z,fed-cut,0.40,5200,Will Fed cut next meeting?,fixture,
+2024-01-02T00:00:00Z,btc-100k,0.63,8100,BTC above 100k by year end?,fixture,
+2024-01-02T00:00:00Z,turnout,0.34,2100,Turnout above 50%?,fixture,
+2024-01-03T00:00:00Z,fed-cut,0.38,5400,Will Fed cut next meeting?,fixture,
+2024-01-03T00:00:00Z,btc-100k,0.65,8200,BTC above 100k by year end?,fixture,
+2024-01-03T00:00:00Z,turnout,0.32,2000,Turnout above 50%?,fixture,
+2024-01-04T00:00:00Z,fed-cut,0.45,5500,Will Fed cut next meeting?,fixture,
+2024-01-04T00:00:00Z,btc-100k,0.58,8000,BTC above 100k by year end?,fixture,
+2024-01-04T00:00:00Z,turnout,0.30,1900,Turnout above 50%?,fixture,
+2024-01-05T00:00:00Z,fed-cut,0.48,5600,Will Fed cut next meeting?,fixture,
+2024-01-05T00:00:00Z,btc-100k,0.55,7900,BTC above 100k by year end?,fixture,
+2024-01-05T00:00:00Z,turnout,0.28,1800,Turnout above 50%?,fixture,
+2024-01-10T00:00:00Z,fed-cut,0.50,6000,Will Fed cut next meeting?,fixture,1
+2024-01-10T00:00:00Z,btc-100k,0.50,6000,BTC above 100k by year end?,fixture,0
+2024-01-10T00:00:00Z,turnout,0.50,2000,Turnout above 50%?,fixture,0
