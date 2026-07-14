@@ -7,10 +7,38 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <!-- HOME / MODULE HUB -->
+    <div id="view-home" class="app-view active">
+      <header class="top home-top">
+        <div class="brand">
+          <h1>Chance Time</h1>
+          <p class="sub">Multi-module desk · paper-first · not financial advice</p>
+        </div>
+        <div class="header-status">
+          <span id="hubMini" class="pill">hub —</span>
+        </div>
+      </header>
+      <main class="home-main">
+        <section class="card hub-equity">
+          <h2 class="card-title">Combined books (snapshot)</h2>
+          <p id="hubEquity" class="mono hub-eq-num">—</p>
+          <p id="hubNote" class="hint">Start API to refresh · naive sum of module equities</p>
+        </section>
+        <section class="module-grid" id="moduleGrid">
+          <p class="hint">Loading modules…</p>
+        </section>
+        <p class="hint" id="homeHint">Click a card to open that desk. US = Kalshi/PM US · Crypto = Path C · Exchange = Path D.</p>
+        <pre id="homeLog" class="log mono small home-log" hidden></pre>
+      </main>
+    </div>
+
+    <!-- US MODULE (Kalshi + Polymarket US) -->
+    <div id="view-us" class="app-view" hidden>
     <header class="top">
       <div class="brand">
-        <h1>Chance Time</h1>
-        <p class="sub">Paper bot + local books · see docs/ORIENTATION.md · not financial advice</p>
+        <button type="button" class="slim back-home" id="btnHomeFromUs">← Home</button>
+        <h1>US venues</h1>
+        <p class="sub">Kalshi + Polymarket US · docs/ORIENTATION.md</p>
       </div>
       <nav class="tabs" role="tablist">
         <button type="button" class="tab active" data-tab="control" role="tab">Control</button>
@@ -277,6 +305,204 @@
           sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
       </div>
     </main>
+
+    </div><!-- /view-us -->
+
+    <!-- CRYPTO UP/DOWN MODULE (Path C) -->
+    <div id="view-crypto" class="app-view" hidden>
+      <header class="top">
+        <div class="brand">
+          <button type="button" class="slim back-home" id="btnHomeFromCrypto">← Home</button>
+          <h1>Crypto Up/Down</h1>
+          <p class="sub">Path C · tweet hybrid · paper</p>
+        </div>
+        <nav class="tabs" role="tablist" data-module="crypto">
+          <button type="button" class="tab active mod-tab" data-mod="crypto" data-mtab="control">Control</button>
+          <button type="button" class="tab mod-tab" data-mod="crypto" data-mtab="monitor">Monitor</button>
+        </nav>
+        <div class="header-status">
+          <span class="badge paper">PAPER</span>
+          <span id="cryptoSessionPill" class="pill">session —</span>
+        </div>
+      </header>
+
+      <main id="crypto-panel-control" class="panel active mod-panel" data-mod="crypto" data-mtab="control">
+        <section class="card status-card">
+          <div class="row"><span class="label">Session</span><span id="cryptoSessionState" class="mono">stopped</span></div>
+          <div class="row"><span class="label">Mode</span><span id="cryptoModeState" class="mono">—</span></div>
+          <div class="row"><span class="label">Book</span><span id="cryptoBookState" class="mono">—</span></div>
+          <div class="row"><span class="label">Last msg</span><span id="cryptoLastMsg" class="mono small">—</span></div>
+        </section>
+        <section class="card">
+          <h2 class="card-title">Session</h2>
+          <p class="hint">Long-running poll. Use <strong>Monitor</strong> tab anytime for logs/scorecard (session need not be running).</p>
+          <label class="row" style="gap:0.5rem;margin:0.4rem 0">
+            <input type="checkbox" id="cryptoPaperStrategy" />
+            <span class="small">Paper strategy fills (mispricing + complete-set + snipe)</span>
+          </label>
+          <div class="grid">
+            <button type="button" class="primary" id="btnCryptoCont">Run continuously</button>
+            <button type="button" id="btnCryptoStop">Stop session</button>
+            <button type="button" id="btnCryptoGoMon">Open Monitor</button>
+            <button type="button" class="danger" id="btnCryptoResetBook" data-action="crypto-reset-book">Reset paper book</button>
+          </div>
+          <p class="hint">Reset wipes fills/positions and restores $1000 cash. <strong>Stop the session first.</strong></p>
+          <p class="hint" style="margin-top:0.5rem">Session (N polls):</p>
+          <div class="preset-row">
+            <button type="button" class="slim crypto-session-btn" data-polls="5">5</button>
+            <button type="button" class="slim crypto-session-btn" data-polls="20">20</button>
+            <button type="button" class="slim crypto-session-btn" data-polls="60">60</button>
+            <button type="button" class="slim crypto-session-btn" data-polls="120">120</button>
+          </div>
+        </section>
+        <section class="card">
+          <h2 class="card-title">One-shot tools</h2>
+          <div class="grid">
+            <button type="button" class="primary" id="btnCryptoOnce" data-action="crypto-scan">Scan once</button>
+            <button type="button" id="btnCryptoStatus" data-action="crypto-status">Book status</button>
+            <button type="button" id="btnCryptoScore" data-action="crypto-scorecard">Scorecard</button>
+            <button type="button" id="btnCryptoHub" data-action="crypto-hub">Hub portfolio</button>
+          </div>
+          <p id="cryptoBusy" class="hint" hidden>Running one-shot…</p>
+          <pre id="cryptoOut" class="log proc-logs">(one-shot output)</pre>
+        </section>
+      </main>
+
+      <main id="crypto-panel-monitor" class="panel mod-panel" data-mod="crypto" data-mtab="monitor" hidden>
+        <section class="card status-card">
+          <div class="row"><span class="label">Session</span><span id="cryptoMonSession" class="mono">—</span></div>
+          <div class="row"><span class="label">Book</span><span id="cryptoMonBook" class="mono">—</span></div>
+          <div class="row"><span class="label">Go/No-go</span><span id="cryptoMonGo" class="mono">—</span></div>
+        </section>
+        <section class="card">
+          <div class="row actions">
+            <h2 class="card-title" style="margin:0;flex:1">Session log</h2>
+            <button type="button" class="slim" id="btnCryptoRefreshLog">Refresh</button>
+          </div>
+          <pre id="cryptoLiveLog" class="log proc-logs">(logs from data/desktop-logs/crypto.* — works after any session)</pre>
+        </section>
+        <section class="card">
+          <div class="row actions">
+            <h2 class="card-title" style="margin:0;flex:1">Scorecard</h2>
+            <button type="button" class="slim primary" id="btnCryptoMonScore">Refresh scorecard</button>
+          </div>
+          <pre id="cryptoScoreOut" class="log proc-logs">(phase 29 resolve-aware scorecard)</pre>
+        </section>
+        <section class="card">
+          <div class="row actions">
+            <h2 class="card-title" style="margin:0;flex:1">C→D signals</h2>
+            <button type="button" class="slim" id="btnCryptoMonSig">Load signals</button>
+          </div>
+          <pre id="cryptoSigOut" class="log proc-logs">(latest Path C direction signals)</pre>
+        </section>
+      </main>
+    </div>
+
+    <!-- PATH D: US CRYPTO EXCHANGE -->
+    <div id="view-exchange" class="app-view" hidden>
+      <header class="top">
+        <div class="brand">
+          <button type="button" class="slim back-home" id="btnHomeFromExchange">← Home</button>
+          <h1>US Crypto Exchange</h1>
+          <p class="sub">Path D · spot paper · multi-venue later</p>
+        </div>
+        <nav class="tabs" role="tablist" data-module="exchange">
+          <button type="button" class="tab active mod-tab" data-mod="exchange" data-mtab="control">Control</button>
+          <button type="button" class="tab mod-tab" data-mod="exchange" data-mtab="monitor">Monitor</button>
+        </nav>
+        <div class="header-status">
+          <span class="badge paper">PAPER</span>
+          <span id="exSessionPill" class="pill">session —</span>
+        </div>
+      </header>
+
+      <main id="ex-panel-control" class="panel active mod-panel" data-mod="exchange" data-mtab="control">
+        <section class="card status-card">
+          <div class="row"><span class="label">Session</span><span id="exSessionState" class="mono">stopped</span></div>
+          <div class="row"><span class="label">Mode</span><span id="exModeState" class="mono">—</span></div>
+          <div class="row"><span class="label">Book</span><span id="exBookState" class="mono">—</span></div>
+          <div class="row"><span class="label">Last msg</span><span id="exLastMsg" class="mono small">—</span></div>
+        </section>
+        <section class="card">
+          <h2 class="card-title">Session</h2>
+          <p class="hint">Monitor tab works without a live session. Venues planned: Coinbase · Robinhood · Kraken · Crypto.com</p>
+          <label class="row" style="gap:0.5rem;margin:0.4rem 0">
+            <input type="checkbox" id="exTradeSignals" />
+            <span class="small">Trade on Path C signals (paper fills)</span>
+          </label>
+          <div class="grid">
+            <button type="button" class="primary" id="btnExCont">Run continuously</button>
+            <button type="button" id="btnExStop">Stop session</button>
+            <button type="button" id="btnExGoMon">Open Monitor</button>
+          </div>
+          <p class="hint" style="margin-top:0.5rem">Session (N polls):</p>
+          <div class="preset-row">
+            <button type="button" class="slim ex-session-btn" data-polls="5">5</button>
+            <button type="button" class="slim ex-session-btn" data-polls="20">20</button>
+            <button type="button" class="slim ex-session-btn" data-polls="60">60</button>
+            <button type="button" class="slim ex-session-btn" data-polls="120">120</button>
+          </div>
+        </section>
+        <section class="card">
+          <h2 class="card-title">One-shot tools</h2>
+          <div class="grid">
+            <button type="button" class="primary" id="btnExScan" data-action="ex-scan">Scan quotes</button>
+            <button type="button" id="btnExSignals" data-action="ex-signals">C signals</button>
+            <button type="button" id="btnExStatus" data-action="ex-status">Book status</button>
+            <button type="button" id="btnExBuy" data-action="ex-buy-btc">Paper-buy $10 BTC</button>
+          </div>
+          <p id="exchangeBusy" class="hint" hidden>Running one-shot…</p>
+          <pre id="exchangeOut" class="log proc-logs">(one-shot output)</pre>
+        </section>
+      </main>
+
+      <main id="ex-panel-monitor" class="panel mod-panel" data-mod="exchange" data-mtab="monitor" hidden>
+        <section class="card status-card">
+          <div class="row"><span class="label">Session</span><span id="exMonSession" class="mono">—</span></div>
+          <div class="row"><span class="label">Book</span><span id="exMonBook" class="mono">—</span></div>
+          <div class="row"><span class="label">Cash / equity</span><span id="exMonEquity" class="mono">—</span></div>
+        </section>
+        <section class="card">
+          <div class="row actions">
+            <h2 class="card-title" style="margin:0;flex:1">Session log</h2>
+            <button type="button" class="slim" id="btnExRefreshLog">Refresh</button>
+          </div>
+          <pre id="exLiveLog" class="log proc-logs">(logs from data/desktop-logs/exchange.*)</pre>
+        </section>
+        <section class="card">
+          <div class="row actions">
+            <h2 class="card-title" style="margin:0;flex:1">Quotes snapshot</h2>
+            <button type="button" class="slim primary" id="btnExMonScan">Scan quotes</button>
+          </div>
+          <pre id="exMonQuotes" class="log proc-logs">(Coinbase public mids)</pre>
+        </section>
+        <section class="card">
+          <div class="row actions">
+            <h2 class="card-title" style="margin:0;flex:1">C signals feed</h2>
+            <button type="button" class="slim" id="btnExMonSig">Load signals</button>
+          </div>
+          <pre id="exMonSig" class="log proc-logs">(Path C latest signals)</pre>
+        </section>
+      </main>
+    </div>
+
+    <!-- PLANNED MODULE STUB (Alpaca, etc.) -->
+    <div id="view-planned" class="app-view" hidden>
+      <header class="top">
+        <div class="brand">
+          <button type="button" class="slim back-home" id="btnHomeFromPlanned">← Home</button>
+          <h1 id="plannedTitle">Coming soon</h1>
+          <p class="sub" id="plannedSub">Stretch / planned module</p>
+        </div>
+      </header>
+      <main class="home-main">
+        <section class="card">
+          <p class="hint" id="plannedBody">
+            Not implemented yet. Stretch modules only (e.g. Alpaca).
+          </p>
+        </section>
+      </main>
+    </div>
 
     <script src="main.js"></script>
   </body>

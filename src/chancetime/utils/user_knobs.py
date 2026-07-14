@@ -146,6 +146,13 @@ def snapshot_user_knobs(*, root: Any = None) -> dict[str, Any]:
                 if s.arb_cross.max_open is not None
                 else cfg.risk.max_open_per_strategy,
             },
+            "complement_arb": {
+                "enabled": s.complement_arb.enabled,
+                "weight": s.complement_arb.weight,
+                "max_open": s.complement_arb.max_open
+                if s.complement_arb.max_open is not None
+                else cfg.risk.max_open_per_strategy,
+            },
             "mean_revert": {
                 "enabled": s.mean_revert.enabled,
                 "weight": s.mean_revert.weight,

@@ -38,6 +38,8 @@ class Market(BaseModel):
     yes_bid_size: float | None = Field(default=None, ge=0.0)
     yes_ask_size: float | None = Field(default=None, ge=0.0)
     has_bbo: bool = False
+    # True for MockMarketClient fixtures — never treat as live venue data
+    synthetic: bool = False
     raw: dict[str, object] = Field(default_factory=dict)
 
     @property

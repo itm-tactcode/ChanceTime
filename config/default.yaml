@@ -78,11 +78,68 @@ llm:
 data:
   # mock | kalshi | polymarket (Polymarket US) | both (Kalshi+PM US composite)
   source: mock
-  # Per-venue cap when not using scan-arb --deep
-  max_markets: 100
-  # Dual-venue discovery every N polls when source=both + arb_cross (0=off)
+  max_markets: 150
   discovery_every_polls: 5
   discovery_limit: 150
+  prefer_closing_within_hours: 48.0
+  short_horizon_queries:
+    - bitcoin
+    - btc
+    - ethereum
+    - eth
+    - crypto
+    - "up or down"
+  short_horizon_search_limit: 40
+  reject_synthetic: true
+  # Named universes — strategies set strategies.<name>.universe to select one.
+  # Bot builds each needed profile once per poll (no duplicate HTTP for same name).
+  profiles:
+    broad:
+      max_markets: 150
+      prefer_closing_within_hours: 0
+      drop_beyond_prefer: false
+      queries: []
+    short_bbo:
+      max_markets: 300
+      prefer_closing_within_hours: 48
+      drop_beyond_prefer: false
+      keep_unknown_close: true
+      queries:
+        - bitcoin
+        - btc
+        - ethereum
+        - eth
+        - crypto
+        - "up or down"
+        - "15 min"
+        - "5 min"
+      search_limit_per_query: 40
+    dual_list:
+      max_markets: 250
+      # ~30 days — drop multi-year finals from pairing by default
+      prefer_closing_within_hours: 720
+      drop_beyond_prefer: true
+      keep_unknown_close: false
+      queries:
+        - nba
+        - mlb
+        - fed
+        - election
+        - bitcoin
+        - championship
+      search_limit_per_query: 40
+      deep_discovery: true
+      discovery_every_polls: 5
+      discovery_limit: 200
+    llm_screen:
+      max_markets: 40
+      prefer_closing_within_hours: 168
+      drop_beyond_prefer: false
+      queries:
+        - fed
+        - election
+        - rate
+      search_limit_per_query: 20
 
 # Phase 10: append market/BBO snapshots each poll (JSONL under data/history/)
 history:
@@ -93,6 +150,7 @@ history:
 strategies:
   simple_edge:
     enabled: true
+    universe: broad
     edge_threshold: 0.08
     min_liquidity_usd: 100.0
     default_fair_prob: 0.5
@@ -104,6 +162,7 @@ strategies:
     weight: 1.0
   llm_calibrated:
     enabled: false
+    universe: llm_screen
     edge_threshold: 0.10
     min_liquidity_usd: 100.0
     min_confidence: 0.45
@@ -114,6 +173,7 @@ strategies:
   # Cross-venue Kalshi ↔ Polymarket US (needs dual-listed markets in feed)
   arb_cross:
     enabled: true
+    universe: dual_list
     min_spread: 0.04
     fee_buffer: 0.03
     min_match_score: 0.65
@@ -138,9 +198,26 @@ strategies:
     min_depth_usd: 5.0
     # Dual search + series map so real same-event pairs enter the book
     deep_discovery: true
+  # Same-market YES ask + NO ask < 1 (no LLM). Paper-friendly discovery.
+  complement_arb:
+    enabled: true
+    universe: short_bbo
+    min_edge: 0.01
+    fee_buffer: 0.02
+    require_bbo: true
+    min_depth_usd: 5.0
+    max_leg_usd: 20.0
+    max_pair_usd: 40.0
+    min_liquidity_usd: 0.0
+    size_by_depth: true
+    reject_synthetic: true
+    # 0 = any horizon within profile; profile already prefers short close
+    max_hours_to_close: 0.0
+    weight: 1.0
   # Fade short-horizon mid spikes (needs multi-poll history)
   mean_revert:
     enabled: false
+    universe: broad
     move_threshold: 0.06
     min_liquidity_usd: 100.0
     history_window: 8
@@ -149,6 +226,7 @@ strategies:
   # LLM + news_context only (set llm.news_context or news_context_file)
   news_impulse:
     enabled: false
+    universe: llm_screen
     edge_threshold: 0.06
     min_liquidity_usd: 100.0
     min_confidence: 0.4
@@ -158,10 +236,40 @@ strategies:
   # Offline sklearn model (models/ml_edge.joblib); uv sync --extra ml
   ml_edge:
     enabled: false
+    universe: broad
     model_path: models/ml_edge.joblib
     edge_threshold: 0.05
     min_liquidity_usd: 100.0
     weight: 1.0
+  # --- Log-only research (JSONL under data/research/; no orders) ---
+  pair_gap_tracker:
+    enabled: true
+    universe: dual_list
+    min_match_score: 0.72
+    fee_buffer: 0.03
+    top_n: 40
+    log_name: pair_gap
+    weight: 0.0
+  tte_buckets:
+    enabled: true
+    universe: short_bbo
+    max_rows: 200
+    log_name: tte_buckets
+    weight: 0.0
+  price_buckets:
+    enabled: true
+    universe: broad
+    max_rows: 250
+    log_name: price_buckets
+    weight: 0.0
+  match_quality:
+    enabled: true
+    universe: dual_list
+    min_match_score: 0.55
+    long_tte_hours: 720
+    top_n: 60
+    log_name: match_quality
+    weight: 0.0
 
 execution:
   paper_slippage_bps: 50

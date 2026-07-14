@@ -17,7 +17,7 @@ Agents: **do not** invent venue APIs from memory or from the international Polyg
 |-------|-------------|--------------|------------|
 | **Kalshi** | US prediction exchange API | https://docs.kalshi.com/welcome · [API keys](https://docs.kalshi.com/getting_started/api_keys) · [Environments](https://docs.kalshi.com/getting_started/api_environments) | Account-based: **API Key ID (UUID)** + **private key file**. **Demo and prod credentials are separate** (demo.kalshi.co vs kalshi.com). Public `GET /markets` needs no key; `KALSHI_ENV` only selects the host. Use `mve_filter=exclude` to drop combos. |
 | **Polymarket US** | CFTC-regulated **US** product | https://docs.polymarket.us/api-reference/introduction | Account-based (same *shape* as Kalshi): UUID + private key file. **Not** wallet/CLOB. |
-| Polymarket international | Out of MVP scope | https://docs.polymarket.com (Polygon / CLOB / relayer) | Wallet L1 + CLOB L2 — **different product**; do not mix into `polymarket_us` client |
+| Polymarket international | **Path C** module `crypto_updown/` — not mixed into US bot | https://docs.polymarket.com (Gamma / CLOB / relayer) | Wallet L1 + CLOB L2 for live later; Phase 28 is public data + paper only |
 
 **Polymarket US hosts (from US docs):**
 
@@ -39,7 +39,7 @@ When docs and this file disagree on paths, **prefer the official docs** and upda
 
 **Whenever you add/rename/change a strategy or its config knobs, update `SCROLL.md` in the same session.** New strategies get a full section (not just a table row).
 
-## Current status (as of 2026-07-13)
+## Current status (as of 2026-07-14)
 
 | Component | Path | Status |
 |-----------|------|--------|
@@ -56,25 +56,32 @@ When docs and this file disagree on paths, **prefer the official docs** and upda
 | Dashboard | FastAPI loopback; equity / free-cash / scorecard | **Done** |
 | Desktop shell | `desktop/` Tauri 2 | **Phase 12 usable** |
 | Security docs | `docs/SECURITY.md`, hardened `.gitignore` | **Done** |
-| Personal edge path | Phases **21–22** next (micro live after gates) | **Active** |
-| SaaS / web / mobile | Path B | **Gated** (phases 23+) |
+| Personal edge path (US venues) | Phases **21–22** (micro live after gates) | **Optional** — US dual-list arb unproven |
+| Research loggers | pair_gap / tte / price / match_quality → `data/research/` | **On** |
+| Short-horizon crypto Up/Down | **Path C** — `crypto_updown/` + multi-module Home hub | **Phase 28 paper infra done**; 29–30 gated |
+| US crypto exchange / futures | **Path D** — `crypto_exchange/` paper + C signals | **Phase 31 paper infra done**; live gated |
+| Stocks (Alpaca) | Separate module | **Stretch** |
+| Consumer SaaS / web / mobile | Former Path B | **Stretch only** — not on the active roadmap |
 
-**Honesty for agents:** Paper evidence so far does **not** support marketing positive EV. Prefer flat / selective over overtrading. Never commit secrets.
+**Honesty for agents:** Paper evidence on Kalshi ↔ Polymarket **US** dual-list / complement arb does **not** support marketing positive EV. Prefer flat / selective over overtrading. Never commit secrets. International short crypto binaries are a **different product** (Path C) — do not bolt them onto `polymarket_us`. SaaS is **not** a near-term goal.
 
 **Smoke (bot):** `uv run chancetime strategies --stats` · `uv run chancetime run --account paper --max-polls 2`  
 **Smoke (desktop):** `cd desktop && CHANCETIME_ROOT=$PWD/.. npm run dev`  
 **Config truth:** effective knobs = `default.yaml` ← `user.yaml`. **Restart bot** after YAML edits (unless `hot_reload_risk`).
 
-## Product paths (decide later — build personal-first)
+## Product paths (personal-first; SaaS is stretch)
 
-Chance Time can stay a **personal trading stack** or evolve into a **consumer SaaS**. These are not mutually exclusive in code (multi-tenant is mostly auth + isolation), but **regulation, ToS, and ops cost** diverge hard. Default recommendation: **master personal P&L first**; only open the SaaS path after paper→tiny live works and you have counsel.
+Chance Time is a **personal multi-module trading desk**. Each market surface gets its own package, DB, and guardrails. Consumer SaaS is **out of the active plan** (see Stretch at bottom of roadmap).
 
-| Path | Who trades | Keys | Main risk | Fit for now |
-|------|------------|------|-----------|-------------|
-| **A. Personal / power-user** | You (and maybe co-founders) | Local `.env` / secrets files | Market + ops risk only | **Primary** |
-| **B. Consumer SaaS** | Subscribers; bot trades *their* accounts or a pooled product | OAuth / delegated API access per user | Securities/commodities advice, money transmission, broker rules, venue ToS | **Later / gated** |
+| Path | What | Keys | Fit for now |
+|------|------|------|-------------|
+| **A. US prediction markets** | Kalshi + Polymarket US | Local `.env` / secrets | **Primary stack exists** |
+| **C. Global Poly crypto Up/Down** | Intl CLOB binaries + spot | Paper now; wallet later | **Phase 28 done**; strategy research next |
+| **D. US crypto exchange** | Spot executor now; multi-strategy crypto desk later | Exchange API keys | **Paper infra done** — C signal sink + future strategy host |
+| **E. Stocks** | Alpaca equities/options | Alpaca keys | **Stretch** |
+| ~~**B. Consumer SaaS**~~ | Multi-tenant product | OAuth / BYO keys | **Stretch only** — not phased |
 
-See **§11 Product strategy & regulation notes** below.
+Path C/D are **not** flags on the US prediction-market bot.
 
 ## Next plan of action
 
@@ -248,34 +255,111 @@ Goal: fewer, higher-quality paper→micro-live trades that clear **spread + fees
 
 ---
 
-## Path B (SaaS) — gated; only after personal P&amp;L works
+## Path C — Short-horizon crypto Up/Down (international Polymarket)
 
-### Phase 23 — Path B research (SaaS gate) — **gate**
+**Motivation (2026-07-14):** US dual-list / complement arb shows little executable edge at poll latency. Public accounts in **short crypto Up/Down** (e.g. 5m/15m binaries) are a different market structure: external spot feed + CLOB microstructure + complete-set + late sniping. Strategy details matter, but **you cannot paper-test them without infrastructure** (WS books, spot, paper fills, history). Build **module-first**, strategy-second.
 
-1. Legal memo (software vs advice vs brokerage)
-2. Product shape: signals-only vs BYO keys vs trade-on-account vs fund
-3. Venue partner / OAuth reality check
+**Architecture rule:** Separate package surface — e.g. `src/chancetime_crypto/` or `src/chancetime/crypto_updown/` — **not** mixed into `data_layer/polymarket_us.py`. Own config, paper book, risk, fail-closed (no “if data missing, guess”).
 
-### Phase 24 — Path B SaaS core — **conditional**
+**Strategy sketch (research target, not committed alpha):**
 
-1. Multi-tenant auth (email/OAuth), Stripe, tenant isolation
-2. Prefer venue OAuth for keys; never casual PEM paste in browser
-3. Signals + paper sim first; live only with counsel
-4. Compliance: geo, disclaimers, support runbooks
+1. Record window open spot; stream external price (Binance/etc.)  
+2. Evaluate direction, vol, time remaining, CLOB liquidity  
+3. Model own \(P(\mathrm{Up})\) / \(P(\mathrm{Down})\)  
+4. Buy undervalued side; accumulate opposite if Up+Down asks &lt; 1 (complete-set)  
+5. Near resolution, lean into clear favorite (sniping) — with inventory limits  
 
-### Phase 25 — Web + mobile clients — **conditional**
+**Honest constraints:** Competitive; not institutional µs HFT; capacity and edge decay; paper until scorecard green.
 
-1. **Web app** (responsive): same API as desktop dashboard  
-2. **Mobile** PWA first: status, alerts, kill switch  
-3. Shared OpenAPI; Telegram remains fallback push  
+### Phase 28 — Path C infrastructure (paper) — **done** (2026-07-14)
 
-### Phase 26 — Stocks / broader markets — **optional**
+1. ~~**Data:** Gamma Up/Down discovery; CLOB public books; Coinbase spot (Binance often geo-blocked)~~  
+2. ~~**Clock:** `window_end` / `seconds_remaining` on models~~  
+3. ~~**Paper:** dual-side inventory; complete-set optional; **fail closed** without BBO/spot~~  
+4. ~~**Persistence:** `data/crypto_paper.db` + `data/research/crypto_updown/scan-*.jsonl`~~  
+5. ~~**CLI:** `chancetime crypto scan|run|status|hub`~~  
+6. ~~**Hub:** multi-module home + `/api/hub` + `/api/modules` combined equity~~  
+7. ~~**Desktop:** Home screen cards → US desk / Crypto Up/Down / Exchange~~  
+8. ~~**Optional:** CLOB market WS (`--ws`); window-open quality (`near_open` / `mid_window_join`); HYPE/BNB via CoinGecko/Kraken fallbacks~~  
 
-1. Alpaca (or similar) data + execution modules
+**Exit criteria:** Poll loop logs real books+spot with zero invented prices — **met** for Phase 28. Strategy edge → Phase 29.
 
-### Phase 27 — Hardening & scale — **later**
+### Phase 29 — Path C strategy research (paper only) — **done enough to paper** (2026-07-14)
 
-1. More monitoring, multi-instance, production ops
+**Canonical strategy (tweet hybrid) — one strategy, five steps:**
+
+1. **Open print:** at each window, record external asset price; stream spot continuously  
+2. **State:** direction (spot vs open), vol, time remaining, Polymarket liquidity (spread/BBO)  
+3. **Own P(Up):** heuristic model from spot/open/vol/TTE (research grade — not claimed true cal)  
+4. **Mispricing + complete-set:** buy undervalued side when model vs mid edge ≥ threshold; if Up+Down asks &lt; ~1, buy both  
+5. **Snipe:** near expiry, add size on the clear favorite (model/market agree), inventory-capped  
+
+**Code:** `TweetHybridStrategy` · `--paper-strategy` / shadow · resolve-aware `crypto scorecard` · kill switches (stale spot, daily loss, wide spread skip) · desktop Control + **Monitor** tabs.
+
+**Exit criteria:** Multi-day paper + `go_nogo` on scorecard — **human runs** before Phase 30. Official Poly resolution feed still optional upgrade over spot-vs-ref proxy.
+
+### Path D note (executor, multi-strategy later)
+
+D is the **US crypto rails module** (spot now; futures/options later). Near term: consume C signals + simple paper. **Later** D can host *many* crypto strategies (trend, mean-revert, funding, etc.) independent of event contracts — possibly a larger strategy bag than Path A once Coinbase/RH/Alpaca depth exists. **One step at a time:** prove C paper loop + D paper executor first.
+
+### Phase 30 — Path C micro-live (optional) — **gated**
+
+1. Wallet / CLOB auth in secrets (never in US `.env` mix-ups)  
+2. Tiny size caps; same risk-ack pattern as Phase 6  
+3. Only after Phase 29 scorecard green + human approval  
+
+---
+
+## Path D — US crypto exchange module (planned; personal)
+
+**Motivation:** If intl Polymarket CLOB is awkward (wallet/geo/ToS), short-horizon *direction* ideas can still be researched via **US-eligible crypto products** (spot, regulated futures, and in some cases short-horizon option-like products). Also useful as a plain **spot / futures** desk independent of prediction markets.
+
+**Architecture rule:** New package e.g. `src/chancetime/crypto_exchange/` + `data/crypto_exchange_paper.db` — **not** mixed into `crypto_updown` (intl CLOB) or `polymarket_us`. Same pattern: paper-first, fail-closed, hub card on Home.
+
+**Venue notes (summary — full writeup `docs/CRYPTO_VENUES.md`):**
+
+| Venue | US retail fit | API quality | Closest to “Up/Down binary” |
+|-------|---------------|-------------|------------------------------|
+| **Coinbase Advanced** | Strong: spot + CFTC US futures (CFM) | Excellent REST/WS + official Python SDK | Spot/futures direction, **not** 5m binaries |
+| **Robinhood Crypto API** | Official US crypto trading API | Market data + place crypto orders (v1/v2 fee tiers) | Spot only via this API — not equity options |
+| **Crypto.com + CDNA** | UpDowns / Strike Options (CFTC) | Exchange API; confirm product automation | **Closest US product** to short binary-ish exposure |
+| **Kraken Pro** | Spot + US futures (verify account) | Mature REST/WS/FIX | Directional futures/spot |
+
+**Out of scope for now:** Deribit.
+
+**Honesty:** Short-dated listed options / UpDowns are **not** the same payoff as Polymarket 5m Up/Down (different fees, barriers, knockouts, settlement). Use as *related* research, not a drop-in arb.
+
+### C ↔ D linkage (signals, not a merged module)
+
+Path C and Path D stay **separate packages + DBs**. They may share a **signal bus** later:
+
+- **C publishes** (scan/JSONL/event): asset, window end, implied \(P(\mathrm{Up})\), reference/open level, BBO health.  
+- **D optionally consumes** that to size spot/futures/UpDown exposure when Poly is hard to trade or as a second expression of the same view.  
+- **Hub only sums equity** — no order routing.
+
+Do **not** make D’s exchange client import CLOB trading code, or C place Robinhood/Coinbase orders. Cross play is an explicit strategy with its own risk caps (avoid doubling the same BTC bet blindly). Full writeup: `docs/CRYPTO_VENUES.md` § “Path C vs Path D”.
+
+### Phase 31 — Path D paper infra — **done (spot/Coinbase)**; multi-venue **planned**
+
+1. ~~Coinbase public spot feed + paper book + `crypto_exchange_paper.db`~~  
+2. ~~Hub + desktop Exchange Control/Monitor + `chancetime exchange *`~~  
+3. ~~C→D signal bus + optional `--trade-signals`~~  
+4. **Target venues for D (all four — not all built yet):**  
+
+| Venue | Role in D | Status |
+|-------|-----------|--------|
+| **Coinbase Advanced** | Spot (+ later US futures) | Public ticker paper **done**; private orders later |
+| **Robinhood Crypto API** | Spot orders (official US crypto API) | Stub / keys in `.env.example` |
+| **Kraken Pro** | Spot (+ US futures if unlocked) | Planned adapter |
+| **Crypto.com (+ CDNA)** | Spot + UpDowns/Strike research | Planned adapter |
+
+5. No live until paper scorecard + human ack. **Do not** use Deribit.
+
+### Phase 32 — Path D strategy / multi-venue / micro-live — **gated**
+
+1. Wire RH / Kraken / Crypto.com clients behind same paper book interface  
+2. Own strategies (trend / mean-revert) + Poly-implied consumer  
+3. Micro live with hard caps; correlation cap vs open Path C inventory  
 
 ---
 
@@ -299,7 +383,7 @@ Goal: fewer, higher-quality paper→micro-live trades that clear **spread + fees
 - Stocks later: `alpaca-py`.
 - Other: `typer` CLI, FastAPI local dashboard, `pytest` + hypothesis.
 - Desktop (Phase 12): **Tauri 2** shell around local FastAPI + bot sidecar (prefer over Electron).
-- SaaS clients (Phase 18): same FastAPI OpenAPI for web + mobile (PWA first).
+- Crypto exchange later: Coinbase Advanced SDK / Kraken REST (see Path D). Stocks stretch: `alpaca-py`.
 - Dev tools: `ruff`, `mypy`, `pre-commit`.
 - Deployment: Docker + compose; VPS optional.
 
@@ -437,16 +521,18 @@ After bootstrap, propose the next concrete milestone (e.g., "Implement first sim
 | 10 | History recorder + realistic backtests | **Done** |
 | 11 | Multi-account + daily digests | **Done** |
 | 12 | **Desktop app (Tauri)** | **Usable** |
-| 13 | Dual-leg live automation | Planned (after 14) |
+| 13 | Dual-leg live automation | Planned (after readiness) |
 | 14 | **Live readiness + Ops UI** | **Done** |
 | 15 | **Presets + stats suggestions** | **Done** |
-| 16 | Path B legal/product research | Gate |
-| 17 | Path B SaaS core | Conditional |
-| 18 | **Web + mobile clients** | Conditional |
-| 19 | Stocks (Alpaca) | Optional |
-| 20 | Hardening & scale | Later |
+| 16–20 | Risk / BBO paper / portfolio / scorecard | **Done** (see PROGRESS) |
+| 28 | Path C paper infra (intl Poly crypto) | **Done** |
+| 29 | Path C signals + ref/resolution research | **In progress** (signals + ref + scorecard CLI) |
+| 30 | Path C micro-live | Gated |
+| 31 | Path D paper exchange + C signal consumer | **Done** |
+| 32 | Path D strategies / micro-live | Gated |
+| — | Stocks (Alpaca), SaaS, web/mobile | **Stretch only** |
 
-**Ongoing** — Paper bag experiments, alias maintenance, prompt/ML iteration.
+**Ongoing** — Paper bag experiments, Path C/D research, prompt/ML iteration. **Not** multi-tenant SaaS.
 
 ### Config vs secrets (product rule)
 
@@ -468,7 +554,7 @@ Merge: `--config` YAML ← `user.yaml` ← secrets from env. Ops knobs should no
 - LLM hallucinations: Never blindly trust LLM output for execution. Use it for signals/ideas only; final decisions go through coded risk/execution layers.
 - Cost discipline: If daily LLM spend approaches the limit, the agent must suggest throttling or cheaper alternatives.
 - Prefer paper/demo and mocks until dual-venue execution is proven.
-- **Consumer SaaS is not “just auth + Stripe”** — treat Phase 10 as a hard legal/product gate, not a coding weekend.
+- **Do not** build multi-tenant SaaS scaffolding unless the human explicitly reopens that stretch goal.
 
 ---
 
@@ -481,51 +567,15 @@ Merge: `--config` YAML ← `user.yaml` ← secrets from env. Ops knobs should no
 
 ---
 
-## 11. Product strategy & regulation notes (personal vs SaaS)
+## 11. Product strategy (personal desk)
 
-**Not legal advice.** Prediction markets + automation + subscriptions sit on messy US lines (CFTC-regulated venues, state gambling/DFS rules, SEC “investment advice,” broker-dealer / CTA-like activity if you trade for others). Talk to a lawyer before charging for trading on other people’s accounts.
+**Not legal advice.** Automating trades on prediction markets and crypto derivatives has ToS, tax, and (if you ever trade for others) regulatory implications. This project is **you trading for yourself**.
 
-### Path A — You trade for yourself (recommended first)
+**What we build:** single-tenant modules (US PM, Path C intl binaries, Path D US crypto exchange, later stocks) with shared hub portfolio, separate DBs, paper-first.
 
-**Pros:** Fast iteration; only your KYC; secrets stay on your machine/VPS; lower compliance surface; edge compounds if strategies work.  
-**Cons:** Your capital and time; no subscription revenue; ops is on you.
+**What we do not build (active plan):** multi-tenant SaaS, customer key custody, subscription trading-for-others, mobile client product.
 
-**Setup:** Keep API keys in gitignored `secrets/` + `.env`. Paper → tiny live. Deploy single-tenant on a VPS. Dashboard optional.
-
-### Path B — Consumer app / subscriptions
-
-**What users want:** “Connect Kalshi + Polymarket, turn on strategies, pay $X/mo.” That implies **credential or delegated trading access**.
-
-**SSO / key connect reality:**
-- True **SSO that mints trading keys without the user pasting secrets** only works if **each venue offers OAuth / API authorization** for third-party apps. Do not assume Kalshi or Polymarket US currently expose a polished “Login with X and grant trade” flow for independent SaaS — verify with their partner/docs programs before designing UX around it.
-- Common fallbacks: user uploads API key material, or runs a **local agent** that holds keys (desktop/CLI) while cloud only delivers signals. Local agent is safer for keys but harder product-wise.
-- **Never** design a web product that collects raw private keys into your DB without extreme controls (HSM/KMS, short-lived tokens, audit, pen-test). Even then, ToS may forbid third-party automated trading.
-
-**Regulatory / product friction (high level):**
-1. **Software vs advice vs managing money** — Pure research/signals with clear “not advice” disclaimers is easier than discretionary trading of customer accounts. The more you auto-trade for users, the closer you get to regulated intermediary territory.
-2. **Venue ToS & API policy** — Many platforms restrict scraping, multi-account abuse, or unapproved automation. Partner status may be required for a commercial product.
-3. **Who is the customer of the exchange?** If each user keeps their own Kalshi/PM account and you only send orders as their agent, KYC stays with the venue — but **agency/automation** still needs legal review.
-4. **Pooled capital / “we trade a fund”** — Usually the *hardest* (fund formation, managers, custody). Avoid for MVP fantasies.
-5. **Payments + refunds + geo** — Stripe is easy; geo-blocking under-18 / restricted states and marketing claims (“guaranteed edge”) are not.
-6. **Security liability** — One breach of user keys = catastrophic trust + possible liability. Personal bot breach hurts only you.
-
-**Pragmatic SaaS ladders (if you still want Path B):**
-
-| Ladder | Product | Why easier |
-|--------|---------|------------|
-| B0 | Free/paid **signals + research** (no order placement) | Least “trading for others” |
-| B1 | **Paper sim** on live markets for subscribers | Shows value without live order risk |
-| B2 | **Self-hosted / BYO keys** desktop or VPS one-click (you sell software) | Keys never leave customer infra |
-| B3 | Cloud trade-on-your-account via official OAuth | Only with venue support + counsel |
-| B4 | Managed fund / copy-trade pool | Usually requires serious licensing |
-
-### Recommendation
-
-1. **Ship Path A through Phase 6** (profitable or at least disciplined paper/live).  
-2. If edge is real, consider **B0–B2** (signals or self-hosted) before any cloud key custody.  
-3. Treat **OAuth SSO for venues** as a *partnership dependency*, not a weekend feature.  
-4. Budget real money for **legal review** before charging for automated trading.  
-5. Architect core bot as **single-tenant clean modules** so multi-tenant (if ever) is isolation + auth — don’t prematurely build Cognito/SSO.
+**Stretch only (if ever):** self-hosted license, signals-only feed, or web UI that never holds third-party trading keys — still needs legal review before money changes hands. See historical notes in old PROGRESS entries; no numbered SaaS phases remain.
 
 ---
 

@@ -6,6 +6,293 @@ Agents: update this file when finishing a meaningful unit of work. Also sync the
 
 ---
 
+## 2026-07-14 — Path C cash + resolutions fix (critical)
+
+### Bugs (user correctly flagged equity → 1000)
+1. **`try_buy` never deducted cash** → equity ≈ 1000 + tiny MTM (looked like break-even without resolutions)
+2. **Positions not persisted** to SQLite
+3. **No settlements** — positions never paid $1/$0 at window end
+4. **Window clock wrong** — Gamma listed future 5m windows; duration now fixed via `eventStartTime`→`endDate` (300s); live filter prefers near windows
+
+### Fixes
+- Buy: `cash -= size+fee`; equity = `cash + contracts*mid`
+- Settle: on window end, winners get `$1/contract` into cash; log `resolutions-*.jsonl` + `settlements` table
+- Store: `book_meta`, positions, settlements
+- Gamma: short-window dates + live/soon tier filter
+
+**Must restart** crypto session for code to load.
+
+```bash
+# Stop old session (desktop Stop, or pkill), then:
+uv run chancetime crypto run --interval 15 --paper-strategy
+uv run chancetime crypto status   # cash drops on buys; positions > 0
+# After real window ends:
+ls data/research/crypto_updown/resolutions-*.jsonl
+uv run chancetime crypto scorecard
+```
+
+---
+
+## 2026-07-14 — C/D Monitor tabs + Phase 28 optionals + Phase 29 scorecard
+
+### Desktop
+- Path C & D: **Control | Monitor** tabs (Monitor usable without live session)
+- Monitor: status, log tail, C scorecard + signals; D quotes + signals + book
+
+### Phase 28 optionals
+- Spot fallbacks: CoinGecko (HYPE) + Kraken public
+- Window ref quality: `near_open` / `mid_window_join`
+- Optional CLOB market WS: `crypto run --ws`
+
+### Phase 29
+- `TweetHybridStrategy` + resolve-aware `scorecard.py` / `crypto scorecard`
+- Kill switches: stale spot, daily loss halt, wide spread skip
+- Desktop scorecard panel on C Monitor
+
+### Path D venues (docs)
+- Phase 31–32 target **all four**: Coinbase, Robinhood, Kraken, Crypto.com (build later)
+
+```bash
+cd desktop && ./dev.sh
+uv run chancetime crypto run --once
+uv run chancetime crypto scorecard
+uv run pytest tests/test_scorecard_kill.py tests/test_crypto_updown.py tests/test_tweet_hybrid_strategy.py -q
+```
+
+---
+
+## 2026-07-14 — C/D monitoring UI (A-style sessions + logs)
+
+### Desktop
+- Path C/D desks: **status strip** (session/mode/book/last msg)
+- **Session runner** like US: continuous + 5/20/60/120 polls + Stop
+- Live log tail from `data/desktop-logs/crypto.*` / `exchange.*`
+- Auto-refresh every 4s while C/D view open
+- One-shot tools kept (scan, status, scorecard, hub / signals, paper-buy)
+
+### Tauri
+- `start_crypto_session` / `stop_crypto_session`
+- `start_exchange_session` / `stop_exchange_session`
+- `get_status` includes crypto/exchange running + mode
+- `get_logs` accepts `crypto` | `exchange`
+- Kill all also stops C/D sessions
+
+```bash
+cd desktop && ./dev.sh   # rebuild required for new Rust commands
+```
+
+---
+
+## 2026-07-14 — Path C tweet hybrid strategy (canonical 5-step)
+
+### Strategy (one for C)
+1. Record open spot · stream external price  
+2. Direction, vol, TTE, Poly liquidity  
+3. Own P(Up) heuristic  
+4. Mispricing buy + complete-set if Up+Down asks &lt; ~1  
+5. Late sniping on clear favorite  
+
+**Code:** `TweetHybridStrategy` · bot always **evaluates**; paper fills with `--paper-strategy`  
+**CLI:** `crypto run --shadow-strategy` (default) · `--paper-strategy --strategy-edge 0.06`  
+**Logs:** scan JSONL includes `model_p_up`; actions → `actions-*.jsonl`  
+**D:** remains executor / multi-strategy platform later — not cloned from A
+
+```bash
+uv run chancetime crypto run --once
+uv run chancetime crypto run --once --paper-strategy
+uv run pytest tests/test_tweet_hybrid_strategy.py tests/test_crypto_updown.py -q
+```
+
+---
+
+## 2026-07-14 — Desktop: script order fix + C/D actions
+
+### Bug
+- `main.js` was loaded **inside** `view-us` *before* Path C/D DOM existed → Scan buttons never got handlers
+- Home cards for paper modules looked “disabled” vs US
+
+### Fix
+- Move `<script src="main.js">` to **end of body** (after all views)
+- Document-level click delegation for module cards + `data-action` buttons
+- `openable` styling for active/paper_only; planned stays muted
+- Busy state + output pane for crypto/exchange CLI; home log strip
+- Extra actions: scorecard, hub, trade-signals run, paper-buy BTC
+
+### C/D
+- `crypto scan` also publishes C→D signals
+- Exchange paper-buy reloads cash/positions from DB
+- Exchange poll reports `would_trade` / `traded` counts
+
+Restart desktop: `cd desktop && ./dev.sh` (UI-only is enough if Rust already has `exchange_cli_cmd`)
+
+---
+
+## 2026-07-14 — Desktop cards fix + C/D research next steps
+
+### Desktop
+- Home module cards always render from **FALLBACK_MODULES** (no blank grid if API/CLI hub fails)
+- Route by **module id** (not shared `desktop_view=planned`)
+- `switchView` forces display; card button CSS; loose JSON parse for hub CLI
+
+### Path C
+- Window **reference price** (first-seen spot) + spot_vs_ref in scan JSONL
+- Signals boost/cut confidence when spot agrees/fights ref; late-window boost
+- Resolution proxy log → `data/research/crypto_updown/resolutions-*.jsonl`
+- CLI: `chancetime crypto scorecard`
+
+### Path D
+- Shadow signal rows always (`would_trade`); risk caps (notional/asset, fills/poll, signal_id dedupe)
+- CLI: `chancetime exchange paper-buy BTC --size 25`
+
+```bash
+# reload desktop UI (no rebuild needed for main.js)
+uv run chancetime crypto run --once && uv run chancetime crypto scorecard
+uv run chancetime exchange run --once
+uv run chancetime exchange paper-buy BTC --size 10
+uv run pytest tests/test_crypto_updown.py tests/test_crypto_exchange.py -q
+```
+
+---
+
+## 2026-07-14 — Path C signals + Path D paper exchange module
+
+### Path C
+- `crypto_updown/strategies.py` — implied direction from CLOB
+- Bot publishes `data/research/signals/latest.jsonl` (+ daily log)
+- CLI: `--paper-direction`, `--no-signals`
+
+### Path D
+- New package `src/chancetime/crypto_exchange/` — Coinbase public spot, paper book, store
+- CLI: `chancetime exchange scan|run|status|signals`
+- Optional `--trade-signals` consumes Path C direction (paper buy/sell reduce)
+- Hub includes `crypto_exchange` equity; desktop **Exchange** view + `exchange_cli_cmd`
+- Robinhood: credential stub (signed client later); pricing always Coinbase public for paper
+
+### Verify
+```bash
+uv run chancetime crypto run --once
+uv run chancetime exchange signals
+uv run chancetime exchange run --once
+uv run chancetime exchange run --once --trade-signals
+uv run pytest tests/test_crypto_updown.py tests/test_crypto_exchange.py -q
+```
+
+---
+
+## 2026-07-14 — C↔D signal bus design; Robinhood Crypto API; no Deribit
+
+### Docs
+- `docs/CRYPTO_VENUES.md`: **link C→D via signals**, not merged engines; Deribit **out of scope**
+- **Robinhood Crypto Trading API** elevated (official US crypto orders + market data): https://docs.robinhood.com/
+- Path D first venue choice: Coinbase Advanced **or** Robinhood Crypto (spot)
+- AGENTS: C publishes implied direction; D optional consumer; hub never routes orders
+
+### Design rule
+- Poly “consensus Up in 5m” → optional D spot/futures/UpDown paper fill is a **strategy**, not a hard dependency
+- Payoffs differ (binary ≠ call ≠ spot); fail closed; correlation caps if both modules risk the same asset
+
+---
+
+## 2026-07-14 — SaaS demoted to stretch; Path D crypto venues research
+
+### Docs / product
+- **Removed Path B SaaS phases** from active roadmap → **stretch only**
+- Product table: A US PM · C intl Poly Up/Down · **D US crypto exchange** · E stocks stretch
+- `docs/CRYPTO_VENUES.md` + modules registry + desktop planned stub
+- AGENTS Path D phases **31–32**
+
+---
+
+## 2026-07-14 — Path C Phase 28 complete + multi-module home
+
+### Architecture
+- **Separate modules** (not mixed into `polymarket_us`):
+  - `modules/` registry → US venues · crypto Up/Down · Alpaca (planned)
+  - `crypto_updown/` — Gamma / CLOB public / Coinbase spot / paper book / `crypto_paper.db`
+- **Home hub**: desktop starts on Home; cards open US desk or Crypto paper tools
+- **Combined portfolio**: `GET /api/hub` + `chancetime crypto hub` (naive equity sum; per-module DBs)
+- Fail-closed: missing BBO or unknown spot ⇒ skip trade (never invent prices)
+- Docs: https://docs.polymarket.com/ (intl CLOB) vs https://docs.polymarket.us (US account API)
+
+### Commands
+```bash
+uv run chancetime crypto scan --limit 12
+uv run chancetime crypto run --once
+uv run chancetime crypto hub
+uv run pytest tests/test_crypto_updown.py -q
+# Desktop: rebuild once for crypto_cli_cmd if needed — cd desktop && ./dev.sh
+```
+
+### Next
+- Phase **29**: paper strategy research (mispricing / complete-set / sniping) — only after multi-hour scan logs look sane
+- Optional: CLOB WS, HYPE spot source when Coinbase product missing
+
+---
+
+## 2026-07-14 — Log-only research strategies
+
+- `pair_gap_tracker`, `tte_buckets`, `price_buckets`, `match_quality` — emit **no signals**, append JSONL to `data/research/`
+- Enabled in `default.yaml` + `user.yaml`; weight 0
+- Use for convergence / resolve-rate / match-quality offline studies before coding exits
+
+```bash
+uv run pytest tests/test_research_loggers.py -q
+ls data/research/
+```
+
+---
+
+## 2026-07-14 — Per-strategy universe profiles
+
+- `data.profiles`: **broad**, **short_bbo**, **dual_list**, **llm_screen**
+- Strategies set `universe:` (default: simple/mean/ml→broad, complement→short_bbo, arb_cross→dual_list, llm*→llm_screen)
+- Bot builds each needed profile once per poll; risk/exec use the union
+- `dual_list` hard-drops far closes (default ~30d) + deep discovery cadence
+- `config/user.yaml` + `user.yaml.example` filled with reasonable arb-paper defaults (LLM off, max_days_to_close 45)
+
+```bash
+uv run pytest tests/test_universe_profiles.py -q
+# Restart bot — logs: universes_built profiles={...}
+```
+
+---
+
+## 2026-07-14 — Desktop kill hardening (orphans + exit + verify)
+
+1. **Stop bot** uses full orphan sweep (same breadth as Kill all), not narrow `pkill` only  
+2. Tray tooltip shows **BOT RUNNING** when hidden-with-tray (close ≠ kill)  
+3. **`RunEvent::Exit` / `ExitRequested`** always `kill_all` so shell cannot outlive children  
+4. Post-kill **verify** lists leftover PIDs in the status message  
+
+Rebuild desktop to pick up: `cd desktop && npm run tauri dev` (or your package script).
+
+---
+
+## 2026-07-14 — complement_arb + short-horizon universe + mock isolation
+
+### Strategy
+- New **`complement_arb`**: same-market YES ask + NO ask &lt; 1 after `fee_buffer` (no LLM)
+- Dual-leg `arb_group_id`; portfolio keys `market_id::yes` / `::no`
+- Enabled in `config/default.yaml` for paper discovery
+
+### Data
+- `data_layer/universe.py`: search enrichment + prefer markets closing soon
+- Config: `prefer_closing_within_hours`, `short_horizon_queries`, `reject_synthetic`
+- Bot uses expand_universe when those knobs are set
+- **`build_data_client` no longer silently falls back to mock** on unknown source
+
+### Mock leak fix
+- `Market.synthetic=True` on all MockMarketClient fixtures
+- `arb_cross` / `complement_arb` drop synthetic whenever any live market is present
+- Explains paper “Fed cut” arb when `data.source=mock` (intentional fixtures); will not mix into `source=both`
+
+```bash
+uv run pytest tests/test_complement_arb.py tests/test_arb_cross.py -q
+uv run chancetime run --once   # mock: expect complement_arb_scan / possible signals
+```
+
+---
+
 ## 2026-07-13 — GitHub prep: modularize CLI, security, docs
 
 ### Structure

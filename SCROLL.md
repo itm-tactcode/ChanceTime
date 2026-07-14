@@ -115,6 +115,18 @@ Config knobs live in YAML / `config/user.yaml`. **Secrets** stay in `.env` only.
 | `simple_edge` | `SimpleEdgeStrategy` | Live | Trade when price is far from a fair prior |
 | `llm_calibrated` | `LLMCalibratedStrategy` | Live | Grok estimates fair; trade the gap (cost-capped) |
 | `arb_cross` | `ArbCrossStrategy` | Live | Same event on two venues; buy cheap YES + hedge NO |
+| `complement_arb` | `ComplementArbStrategy` | Live | Same market: buy YES+NO when ask sum &lt; $1 after fees (no LLM) |
+
+**Universe profiles** (`data.profiles` + `strategies.<name>.universe`): each strategy gets its own market slice (shared HTTP, different filters/queries). Defaults: `broad` (simple_edge / mean_revert / ml_edge / price_buckets), `short_bbo` (complement_arb / tte_buckets), `dual_list` (arb_cross / pair_gap / match_quality), `llm_screen` (llm_calibrated / news_impulse).
+
+**Log-only research** (enabled by default; **no orders**): write JSONL under `data/research/`:
+
+| Strategy | File stem | What it logs |
+|----------|-----------|--------------|
+| `pair_gap_tracker` | `pair_gap-YYYYMMDD.jsonl` | Dual-list exec edge, BBO, TTE each poll |
+| `tte_buckets` | `tte_buckets-…` | Mid/spread by hours-to-close bucket |
+| `price_buckets` | `price_buckets-…` | Open mids by price band (resolve later offline) |
+| `match_quality` | `match_quality-…` | Match score, long-TTE / year-mismatch flags |
 | `mean_revert` | `MeanRevertStrategy` | Live | Fade short-term mid spikes/dumps |
 | `news_impulse` | `NewsImpulseStrategy` | Scaffold | Grok re-prices after news text you provide |
 | `ml_edge` | `MLEdgeStrategy` | Live (offline train) | sklearn model → fair; train with `train-ml` |
@@ -273,6 +285,45 @@ uv run chancetime scan-arb --source mock
 uv run chancetime scan-arb --deep --bbo --limit 250
 uv run chancetime markets "france" -v both
 ```
+
+---
+
+## 5b. `complement_arb` — “YES + NO cost less than a dollar on one market”
+
+**Code:** `strategies/complement_arb.py`  
+**Config:** `strategies.complement_arb`  
+**No LLM** — pure bid/ask math (HFT-adjacent; edge is rare and short-lived).
+
+### Story
+
+On a binary market, buying **YES and NO** locks $1 at resolution. If you can pay:
+
+```
+yes_ask + no_ask + fees < 1
+```
+
+you have same-market **complement** arb (not the same as cross-venue arb).
+
+Most books keep this gap closed. When it flashes, bots race. Chance Time paper-scans every poll so you can measure frequency — do not expect free lunch.
+
+### Knobs
+
+| Param | Role |
+|-------|------|
+| `min_edge` + `fee_buffer` | Required `1 - yes_ask - no_ask - fee_buffer` |
+| `require_bbo` | Need real bid/ask (default on) |
+| `max_hours_to_close` | Optional: only short-dated markets |
+| `max_leg_usd` / `max_pair_usd` | Size caps |
+
+### Data feed
+
+Page-1 open markets are sports-heavy. Config `data.prefer_closing_within_hours` + `short_horizon_queries` expands the universe via venue search (still no LLM).
+
+### Safety
+
+- Dual legs share `arb_group_id` (both-or-neither paper fill)  
+- Portfolio keys `market_id::yes` / `market_id::no` so both sides can open  
+- Mock fixtures are **dropped** whenever any live market is in the feed  
 
 ---
 
@@ -494,3 +545,58 @@ Simulated **paper** fills apply `paper_fee_bps` + BBO drag.
 ---
 
 **Not financial advice.** Prediction markets involve real risk of loss. Start paper, size tiny, and treat every strategy as an experiment until your own stats say otherwise.
+
+---
+
+## Path C — Tweet hybrid crypto Up/Down (intl Polymarket)
+
+**Module:** `src/chancetime/crypto_updown/` · **Not** Polymarket US.  
+**Status:** Phase 29 research (paper). **CLI:** `chancetime crypto run` (shadow) · `--paper-strategy` (paper fills).
+
+This is the **one** primary Path C strategy — a 5-step loop adapted from public “short crypto Up/Down bot” writeups. It is **not** proven edge; treat as a lab experiment.
+
+### The five steps
+
+| Step | What | Code |
+|------|------|------|
+| 1 | Record open/external price at first sight of window; stream Coinbase spot | `CryptoUpDownBot._window_refs` |
+| 2 | Direction (spot vs open), vol (recent returns), TTE, Poly liquidity (spread/BBO) | `TweetHybridStrategy.evaluate_market` |
+| 3 | Own **P(Up)** from spot/open/vol/TTE (heuristic sigmoid) | `model_p_up` |
+| 4 | Buy undervalued side if \|model − market mid\| ≥ edge; complete-set if ask_up+ask_down &lt; threshold | `decide_actions` phases `mispricing` / `complete_set` |
+| 5 | Near end, add size on clear favorite (snipe) | phase `snipe` |
+
+### Knobs (`TweetStrategyConfig`)
+
+| Knob | Default | Meaning |
+|------|---------|---------|
+| `min_edge` | 0.06 | Min model vs market gap to take mispricing leg |
+| `size_usd` / `snipe_size_usd` | 5 | Paper notional per leg |
+| `complete_set_max_sum` | 0.995 | Buy both sides only if ask sum below this |
+| `max_spread` | 0.12 | Skip if side spread too wide |
+| `snipe_seconds` | 90 | Enter snipe zone under this TTE |
+| `snipe_min_p` | 0.62 | Clear-favorite threshold |
+| `max_usd_per_market_side` | 25 | Inventory cap per market side |
+
+CLI: `--strategy-edge`, `--size`, `--paper-strategy` / `--shadow-strategy`.
+
+### Path D relationship
+
+- C **publishes** direction/model signals → `data/research/signals/`
+- D **may** paper-follow with `exchange run --trade-signals`
+- D is an **executor platform** that can later hold many crypto strategies (trend, etc.) and even grow larger than Path A’s bag — **after** C’s paper loop is honest
+
+### Failure modes
+
+- Model is **not** true probability — wrong vol/open → wrong edge  
+- Complete-set rare when books are 1.01–1.02  
+- Sniping into thin books = adverse selection  
+- Spot vs ref resolution is a **proxy**, not always official Poly settlement  
+
+### Commands
+
+```bash
+uv run chancetime crypto run --once                    # shadow eval + signals
+uv run chancetime crypto run --max-polls 40 --interval 15 --paper-strategy
+uv run chancetime crypto scorecard
+```
+

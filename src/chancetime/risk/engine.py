@@ -223,6 +223,9 @@ class RiskEngine:
         def _spread_ok(sig: Signal) -> bool:
             if max_spread <= 0:
                 return True
+            # Complement already requires both asks; inverted books look "wide"
+            if sig.metadata.get("same_market_complement"):
+                return True
             mkt = self.markets.get(sig.market_id)
             if mkt is None or mkt.yes_bid is None or mkt.yes_ask is None:
                 return True
@@ -231,6 +234,9 @@ class RiskEngine:
 
         def _net_edge_ok(sig: Signal) -> bool:
             """Require |edge| clears half-spread + fee + min_net_edge (probability points)."""
+            # Complement edge is already 1 - yes_ask - no_ask - fee_buffer
+            if sig.metadata.get("same_market_complement"):
+                return abs(float(sig.edge)) + 1e-12 >= min_net
             half_spread = _half_spread_for(sig)
             if min_net <= 0 and half_spread <= 0 and fee_pts <= 0:
                 return True
@@ -397,18 +403,21 @@ class RiskEngine:
                     if enforce_cash:
                         cash_left -= sz_leg
                     approved.append(sized)
-                    seen_markets.add(sized.market_id)
+                    seen_markets.add(self._position_key(sized))
+                    if not sized.metadata.get("same_market_complement"):
+                        seen_markets.add(sized.market_id)
                     family_exp[fam] = family_exp.get(fam, 0.0) + sz_leg
                     cluster_exp[ckey] = cluster_exp.get(ckey, 0.0) + sz_leg
                 _note_approved_strategy(name, n=len(sized_legs))
                 continue
 
-            if sig.market_id in seen_markets:
+            pkey = self._position_key(sig)
+            if pkey in seen_markets or sig.market_id in seen_markets:
                 continue
             if sig.market_id in self.cooldown_markets:
                 _bump("cooldown_reentry")
                 continue
-            if sig.market_id in self.portfolio.positions:
+            if pkey in self.portfolio.positions or sig.market_id in self.portfolio.positions:
                 _bump("already_open")
                 continue
             if self.portfolio.open_count + len(approved) >= self.settings.max_open_positions:
@@ -499,6 +508,16 @@ class RiskEngine:
 
         return approved
 
+    @staticmethod
+    def _position_key(sig: Signal) -> str:
+        """Portfolio key; complement legs use market_id::side."""
+        pk = sig.metadata.get("position_key")
+        if pk:
+            return str(pk)
+        if sig.metadata.get("same_market_complement"):
+            return f"{sig.market_id}::{sig.side.value}"
+        return sig.market_id
+
     def _group_fits(
         self,
         legs: list[Signal],
@@ -506,8 +525,21 @@ class RiskEngine:
         seen_markets: set[str],
         miss_counts: dict[str, int] | None = None,
     ) -> bool:
+        complement = all(bool(leg.metadata.get("same_market_complement")) for leg in legs)
+        seen_keys_in_group: set[str] = set()
         for leg in legs:
-            if leg.market_id in seen_markets or leg.market_id in self.portfolio.positions:
+            pkey = self._position_key(leg)
+            if pkey in seen_keys_in_group:
+                if miss_counts is not None:
+                    miss_counts["arb_leg_blocked"] = miss_counts.get("arb_leg_blocked", 0) + 1
+                return False
+            seen_keys_in_group.add(pkey)
+            # Cross-venue: bare market_id uniqueness. Complement: position_key uniqueness.
+            blocked = pkey in self.portfolio.positions or pkey in seen_markets
+            if not complement:
+                blocked = blocked or leg.market_id in seen_markets
+                blocked = blocked or leg.market_id in self.portfolio.positions
+            if blocked:
                 if miss_counts is not None:
                     miss_counts["arb_leg_blocked"] = miss_counts.get("arb_leg_blocked", 0) + 1
                 else:
@@ -516,6 +548,7 @@ class RiskEngine:
                         slogan=MISS,
                         reason="arb_leg_blocked",
                         market_id=leg.market_id,
+                        position_key=pkey,
                     )
                 return False
         if self.portfolio.open_count + len(approved) + len(legs) > self.settings.max_open_positions:
@@ -591,11 +624,13 @@ class RiskEngine:
         entry_price: float,
         strategy: str = "",
         contracts: float | None = None,
+        position_key: str | None = None,
     ) -> None:
         from chancetime.strategies.base import Side
 
+        key = position_key or market_id
         self.portfolio.open_position(
-            market_id=market_id,
+            market_id=key,
             platform=platform,
             side=side if isinstance(side, Side) else Side(str(side)),
             size_usd=size_usd,
@@ -603,6 +638,15 @@ class RiskEngine:
             strategy=strategy,
             contracts=contracts,
         )
+
+    @staticmethod
+    def _yes_mid_for_key(market_key: str, yes_mids: dict[str, float]) -> float | None:
+        if market_key in yes_mids:
+            return yes_mids[market_key]
+        if "::" in market_key:
+            bare = market_key.rsplit("::", 1)[0]
+            return yes_mids.get(bare)
+        return None
 
     def manage_open_positions(self, yes_mids: dict[str, float]) -> list[ClosedTrade]:
         """Apply take-profit / stop-loss; return list of ClosedTrade."""
@@ -615,7 +659,7 @@ class RiskEngine:
             return closed
 
         for market_id, pos in list(self.portfolio.positions.items()):
-            yes = yes_mids.get(market_id)
+            yes = self._yes_mid_for_key(market_id, yes_mids)
             if yes is None:
                 continue
             exit_px = self.portfolio._side_price(pos.side, yes)
@@ -630,6 +674,8 @@ class RiskEngine:
                 trade = self.portfolio.close(market_id, exit_yes_mid=yes, reason=reason)
                 if trade is not None:
                     closed.append(trade)
+                    bare = market_id.rsplit("::", 1)[0] if "::" in market_id else market_id
+                    self.cooldown_markets.add(bare)
                     self.cooldown_markets.add(market_id)
                     log.info(
                         "position_exit_rule",

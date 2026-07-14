@@ -71,4 +71,7 @@ def build_data_client(
                 ),
             ]
         )
-    return MockMarketClient()
+    raise ValueError(
+        f"Unknown data.source={source!r}. "
+        "Use mock | kalshi | polymarket | polymarket_us | both"
+    )

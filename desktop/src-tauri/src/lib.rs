@@ -35,13 +35,25 @@ struct TrackedProc {
 struct ProcState {
     bot: Option<TrackedProc>,
     dash: Option<TrackedProc>,
+    /// Path C: `chancetime crypto run …`
+    crypto: Option<TrackedProc>,
+    /// Path D: `chancetime exchange run …`
+    exchange: Option<TrackedProc>,
     paper_mode: bool,
     project_root: PathBuf,
     last_bot_msg: String,
     last_dash_msg: String,
+    last_crypto_msg: String,
+    last_exchange_msg: String,
     /// "continuous" | "session" | ""
     bot_mode: String,
     bot_max_polls: Option<u32>,
+    crypto_mode: String,
+    crypto_max_polls: Option<u32>,
+    crypto_paper_strategy: bool,
+    exchange_mode: String,
+    exchange_max_polls: Option<u32>,
+    exchange_trade_signals: bool,
 }
 
 impl ProcState {
@@ -49,12 +61,22 @@ impl ProcState {
         Self {
             bot: None,
             dash: None,
+            crypto: None,
+            exchange: None,
             paper_mode: true,
             project_root,
             last_bot_msg: String::new(),
             last_dash_msg: String::new(),
+            last_crypto_msg: String::new(),
+            last_exchange_msg: String::new(),
             bot_mode: String::new(),
             bot_max_polls: None,
+            crypto_mode: String::new(),
+            crypto_max_polls: None,
+            crypto_paper_strategy: false,
+            exchange_mode: String::new(),
+            exchange_max_polls: None,
+            exchange_trade_signals: false,
         }
     }
 }
@@ -75,6 +97,16 @@ struct StatusPayload {
     last_dash_msg: String,
     bot_mode: String,
     bot_max_polls: Option<u32>,
+    crypto_running: bool,
+    exchange_running: bool,
+    last_crypto_msg: String,
+    last_exchange_msg: String,
+    crypto_mode: String,
+    crypto_max_polls: Option<u32>,
+    crypto_paper_strategy: bool,
+    exchange_mode: String,
+    exchange_max_polls: Option<u32>,
+    exchange_trade_signals: bool,
 }
 
 fn resolve_project_root() -> PathBuf {
@@ -325,44 +357,124 @@ fn kill_tracked(proc: &mut Option<TrackedProc>) {
     }
 }
 
+/// Pattern matching leftover bot/dashboard processes (venv, uv, python -m, sidecar).
+const ORPHAN_AWK: &str = r#"/[.]venv[/]bin[/]chancetime|[.]venv[/]bin[/]python.*chancetime|python[0-9.]* -m chancetime|chancetime-cli|[/]uv run chancetime|uv run python.*chancetime/ && !/awk/ && !/chancetime-desktop/"#;
+
 /// Kill orphan chancetime bot/dashboard processes not tracked by this shell.
 /// Previous desktop restarts leave python/sidecar children holding port 8787.
 fn kill_orphans_by_name() -> String {
     #[cfg(unix)]
     {
-        // Use awk self-masking so we never match our own shell cmdline.
-        // Matches venv console script + PyInstaller sidecar.
         let script = format!(
             r#"
 set +e
-ps -eo pid=,cmd= | awk '/[.]venv[/]bin[/]chancetime|[.]venv[/]bin[/]python.*chancetime|chancetime-cli|[/]uv run chancetime/ && !/awk/ {{print $1}}' | while read -r p; do
+ps -eo pid=,cmd= | awk '{pat} {{print $1}}' | while read -r p; do
   kill -TERM "$p" 2>/dev/null
 done
-sleep 0.25
-ps -eo pid=,cmd= | awk '/[.]venv[/]bin[/]chancetime|[.]venv[/]bin[/]python.*chancetime|chancetime-cli|[/]uv run chancetime/ && !/awk/ {{print $1}}' | while read -r p; do
+sleep 0.35
+ps -eo pid=,cmd= | awk '{pat} {{print $1}}' | while read -r p; do
   kill -KILL "$p" 2>/dev/null
 done
+# Broad pkill fallbacks (cmdline variants)
+pkill -TERM -f 'chancetime run' 2>/dev/null
+pkill -TERM -f 'chancetime-cli run' 2>/dev/null
+pkill -TERM -f 'python -m chancetime' 2>/dev/null
+pkill -TERM -f 'uv run chancetime' 2>/dev/null
+sleep 0.2
+pkill -KILL -f 'chancetime run' 2>/dev/null
+pkill -KILL -f 'chancetime-cli run' 2>/dev/null
+pkill -KILL -f 'python -m chancetime' 2>/dev/null
+pkill -KILL -f 'uv run chancetime' 2>/dev/null
 # Free API port
 if command -v fuser >/dev/null 2>&1; then
   fuser -k {port}/tcp >/dev/null 2>&1
 fi
-# ss pid extract
 ss -lptn "sport = :{port}" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | while read -r p; do
   kill -KILL "$p" 2>/dev/null
 done
 "#,
+            pat = ORPHAN_AWK,
             port = DASHBOARD_PORT
         );
         let _ = Command::new("sh").args(["-c", &script]).status();
-        if port_open(DASHBOARD_HOST, DASHBOARD_PORT) {
-            "orphans cleaned; port 8787 STILL open".into()
+        let still = list_orphan_pids();
+        let port = port_open(DASHBOARD_HOST, DASHBOARD_PORT);
+        if still.is_empty() && !port {
+            "orphans cleaned; no leftovers; port 8787 free".into()
+        } else if still.is_empty() {
+            format!("orphans cleaned; port 8787 {}", if port { "STILL OPEN" } else { "free" })
         } else {
-            "orphans cleaned; port 8787 free".into()
+            format!(
+                "orphans cleaned; STILL ALIVE pids=[{}] port={}",
+                still.join(","),
+                if port { "open" } else { "free" }
+            )
         }
     }
     #[cfg(not(unix))]
     {
         "orphan cleanup (unix only)".into()
+    }
+}
+
+/// PIDs that still look like a Chance Time bot/dashboard after kill attempts.
+fn list_orphan_pids() -> Vec<String> {
+    #[cfg(unix)]
+    {
+        let script = format!(
+            r#"ps -eo pid=,cmd= | awk '{pat} {{print $1}}'"#,
+            pat = ORPHAN_AWK
+        );
+        let out = Command::new("sh")
+            .args(["-c", &script])
+            .output()
+            .ok();
+        let Some(out) = out else {
+            return vec![];
+        };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+    #[cfg(not(unix))]
+    {
+        vec![]
+    }
+}
+
+/// After stop/kill: confirm nothing remains; surface leftover PIDs in UI.
+fn verify_bots_dead() -> String {
+    let still = list_orphan_pids();
+    if still.is_empty() {
+        "verified: no chancetime bot/dashboard processes".into()
+    } else {
+        format!(
+            "WARNING still alive: pids=[{}] — check: pgrep -af chancetime",
+            still.join(",")
+        )
+    }
+}
+
+fn refresh_tray_tooltip(app: &AppHandle) {
+    let st = app.state::<Shared>();
+    let payload = status_inner(&st);
+    let tip = if payload.bot_running {
+        format!(
+            "Chance Time — BOT RUNNING ({}) — Quit tray menu to stop",
+            if payload.bot_mode.is_empty() {
+                "continuous"
+            } else {
+                &payload.bot_mode
+            }
+        )
+    } else {
+        "Chance Time — bot stopped".into()
+    };
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(tip));
     }
 }
 
@@ -400,6 +512,8 @@ fn status_inner(state: &Shared) -> StatusPayload {
     let mut s = state.lock();
     let bot = child_running(&mut s.bot);
     let mut dash = child_running(&mut s.dash);
+    let crypto = child_running(&mut s.crypto);
+    let exchange = child_running(&mut s.exchange);
     let port = port_open(DASHBOARD_HOST, DASHBOARD_PORT);
     // Port open counts as dashboard "up" even if we lost the Child handle
     if port {
@@ -408,6 +522,14 @@ fn status_inner(state: &Shared) -> StatusPayload {
     if !bot {
         s.bot_mode.clear();
         s.bot_max_polls = None;
+    }
+    if !crypto {
+        s.crypto_mode.clear();
+        s.crypto_max_polls = None;
+    }
+    if !exchange {
+        s.exchange_mode.clear();
+        s.exchange_max_polls = None;
     }
     StatusPayload {
         project_root: s.project_root.display().to_string(),
@@ -421,6 +543,16 @@ fn status_inner(state: &Shared) -> StatusPayload {
         last_dash_msg: s.last_dash_msg.clone(),
         bot_mode: s.bot_mode.clone(),
         bot_max_polls: s.bot_max_polls,
+        crypto_running: crypto,
+        exchange_running: exchange,
+        last_crypto_msg: s.last_crypto_msg.clone(),
+        last_exchange_msg: s.last_exchange_msg.clone(),
+        crypto_mode: s.crypto_mode.clone(),
+        crypto_max_polls: s.crypto_max_polls,
+        crypto_paper_strategy: s.crypto_paper_strategy,
+        exchange_mode: s.exchange_mode.clone(),
+        exchange_max_polls: s.exchange_max_polls,
+        exchange_trade_signals: s.exchange_trade_signals,
     }
 }
 
@@ -592,6 +724,7 @@ fn start_bot_inner(
     Ok(msg)
 }
 
+/// Stop bot + full orphan sweep (same cleanup as kill for bot processes).
 fn stop_bot_inner(state: &Shared) -> Result<String, String> {
     {
         let mut s = state.lock();
@@ -599,11 +732,11 @@ fn stop_bot_inner(state: &Shared) -> Result<String, String> {
         s.bot_mode.clear();
         s.bot_max_polls = None;
     }
-    // Also stop orphan bots from older desktop sessions
-    let _ = Command::new("pkill").args(["-f", "chancetime run"]).status();
-    let _ = Command::new("pkill").args(["-f", "chancetime-cli run"]).status();
+    // Same breadth as Kill all for bot orphans (previous sessions, uv/python variants)
+    let orphan = kill_orphans_by_name();
+    let verify = verify_bots_dead();
     let mut s = state.lock();
-    s.last_bot_msg = "bot stopped (incl. orphans)".into();
+    s.last_bot_msg = format!("bot stopped — {orphan}; {verify}");
     Ok(s.last_bot_msg.clone())
 }
 
@@ -612,18 +745,180 @@ fn kill_all_inner(state: &Shared) -> Result<String, String> {
         let mut s = state.lock();
         kill_tracked(&mut s.bot);
         kill_tracked(&mut s.dash);
+        kill_tracked(&mut s.crypto);
+        kill_tracked(&mut s.exchange);
         s.bot_mode.clear();
         s.bot_max_polls = None;
+        s.crypto_mode.clear();
+        s.crypto_max_polls = None;
+        s.exchange_mode.clear();
+        s.exchange_max_polls = None;
+        s.last_crypto_msg = "stopped (kill all)".into();
+        s.last_exchange_msg = "stopped (kill all)".into();
     }
     let orphan = kill_orphans_by_name();
+    let verify = verify_bots_dead();
     let mut s = state.lock();
-    s.last_bot_msg = "killed".into();
+    s.last_bot_msg = format!("killed — {verify}");
     s.last_dash_msg = orphan.clone();
     let port = port_open(DASHBOARD_HOST, DASHBOARD_PORT);
     Ok(format!(
-        "kill all: tracked + orphans ({orphan}); port 8787 {}",
+        "kill all: tracked + orphans ({orphan}); {verify}; port 8787 {}",
         if port { "STILL OPEN" } else { "free" }
     ))
+}
+
+fn start_crypto_session_inner(
+    state: &Shared,
+    max_polls: Option<u32>,
+    paper_strategy: bool,
+    interval: Option<f64>,
+) -> Result<String, String> {
+    {
+        let mut s = state.lock();
+        if child_running(&mut s.crypto) {
+            s.last_crypto_msg = "already running".into();
+            return Ok("crypto session already running".into());
+        }
+        // Drop stale tracked handle if child already dead
+        let _ = child_running(&mut s.crypto);
+    }
+    let root = state.lock().project_root.clone();
+    // Kill orphan crypto sessions from prior desktop/CLI restarts (same paper DB)
+    let _ = Command::new("pkill")
+        .args(["-f", "chancetime crypto run"])
+        .status();
+    std::thread::sleep(Duration::from_millis(400));
+    let mut args: Vec<String> = vec!["crypto".into(), "run".into()];
+    let mode = if let Some(n) = max_polls {
+        if n > 0 {
+            args.push("--max-polls".into());
+            args.push(n.to_string());
+            "session"
+        } else {
+            "continuous"
+        }
+    } else {
+        "continuous"
+    };
+    let iv = interval.unwrap_or(15.0);
+    args.push("--interval".into());
+    args.push(iv.to_string());
+    if paper_strategy {
+        args.push("--paper-strategy".into());
+    }
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let child = spawn_chancetime(&root, &arg_refs, "crypto")?;
+    {
+        let mut s = state.lock();
+        s.crypto = Some(child);
+        s.crypto_mode = mode.into();
+        s.crypto_max_polls = max_polls.filter(|n| *n > 0);
+        s.crypto_paper_strategy = paper_strategy;
+    }
+    {
+        let mut s = state.lock();
+        if let Err(e) = verify_still_alive(&mut s.crypto, &root, "crypto", 800) {
+            s.last_crypto_msg = e.clone();
+            s.crypto_mode.clear();
+            s.crypto_max_polls = None;
+            return Err(e);
+        }
+    }
+    let msg = match (mode, max_polls, paper_strategy) {
+        ("session", Some(n), true) => {
+            format!("crypto SESSION {n} polls · paper-strategy · interval={iv}s")
+        }
+        ("session", Some(n), false) => {
+            format!("crypto SESSION {n} polls · shadow · interval={iv}s")
+        }
+        (_, _, true) => format!("crypto CONTINUOUS · paper-strategy · interval={iv}s"),
+        _ => format!("crypto CONTINUOUS · shadow · interval={iv}s"),
+    };
+    state.lock().last_crypto_msg = msg.clone();
+    Ok(msg)
+}
+
+fn stop_crypto_session_inner(state: &Shared) -> Result<String, String> {
+    let mut s = state.lock();
+    kill_tracked(&mut s.crypto);
+    s.crypto_mode.clear();
+    s.crypto_max_polls = None;
+    s.last_crypto_msg = "crypto session stopped".into();
+    Ok(s.last_crypto_msg.clone())
+}
+
+fn start_exchange_session_inner(
+    state: &Shared,
+    max_polls: Option<u32>,
+    trade_signals: bool,
+    interval: Option<f64>,
+) -> Result<String, String> {
+    {
+        let mut s = state.lock();
+        if child_running(&mut s.exchange) {
+            s.last_exchange_msg = "already running".into();
+            return Ok("exchange session already running".into());
+        }
+    }
+    let root = state.lock().project_root.clone();
+    let mut args: Vec<String> = vec!["exchange".into(), "run".into()];
+    let mode = if let Some(n) = max_polls {
+        if n > 0 {
+            args.push("--max-polls".into());
+            args.push(n.to_string());
+            "session"
+        } else {
+            "continuous"
+        }
+    } else {
+        "continuous"
+    };
+    let iv = interval.unwrap_or(20.0);
+    args.push("--interval".into());
+    args.push(iv.to_string());
+    if trade_signals {
+        args.push("--trade-signals".into());
+    }
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let child = spawn_chancetime(&root, &arg_refs, "exchange")?;
+    {
+        let mut s = state.lock();
+        s.exchange = Some(child);
+        s.exchange_mode = mode.into();
+        s.exchange_max_polls = max_polls.filter(|n| *n > 0);
+        s.exchange_trade_signals = trade_signals;
+    }
+    {
+        let mut s = state.lock();
+        if let Err(e) = verify_still_alive(&mut s.exchange, &root, "exchange", 800) {
+            s.last_exchange_msg = e.clone();
+            s.exchange_mode.clear();
+            s.exchange_max_polls = None;
+            return Err(e);
+        }
+    }
+    let msg = match (mode, max_polls, trade_signals) {
+        ("session", Some(n), true) => {
+            format!("exchange SESSION {n} polls · trade-signals · interval={iv}s")
+        }
+        ("session", Some(n), false) => {
+            format!("exchange SESSION {n} polls · shadow · interval={iv}s")
+        }
+        (_, _, true) => format!("exchange CONTINUOUS · trade-signals · interval={iv}s"),
+        _ => format!("exchange CONTINUOUS · shadow · interval={iv}s"),
+    };
+    state.lock().last_exchange_msg = msg.clone();
+    Ok(msg)
+}
+
+fn stop_exchange_session_inner(state: &Shared) -> Result<String, String> {
+    let mut s = state.lock();
+    kill_tracked(&mut s.exchange);
+    s.exchange_mode.clear();
+    s.exchange_max_polls = None;
+    s.last_exchange_msg = "exchange session stopped".into();
+    Ok(s.last_exchange_msg.clone())
 }
 
 /// Run project CLI and capture stdout (for knobs / doctor).
@@ -714,22 +1009,29 @@ fn stop_dashboard(state: State<'_, Shared>) -> Result<String, String> {
 
 #[tauri::command]
 fn start_bot(
+    app: AppHandle,
     state: State<'_, Shared>,
     config: Option<String>,
     account: Option<String>,
     max_polls: Option<u32>,
 ) -> Result<String, String> {
-    start_bot_inner(&state, config, account, max_polls)
+    let msg = start_bot_inner(&state, config, account, max_polls)?;
+    refresh_tray_tooltip(&app);
+    Ok(msg)
 }
 
 #[tauri::command]
-fn stop_bot(state: State<'_, Shared>) -> Result<String, String> {
-    stop_bot_inner(&state)
+fn stop_bot(app: AppHandle, state: State<'_, Shared>) -> Result<String, String> {
+    let msg = stop_bot_inner(&state)?;
+    refresh_tray_tooltip(&app);
+    Ok(msg)
 }
 
 #[tauri::command]
-fn kill_all(state: State<'_, Shared>) -> Result<String, String> {
-    kill_all_inner(&state)
+fn kill_all(app: AppHandle, state: State<'_, Shared>) -> Result<String, String> {
+    let msg = kill_all_inner(&state)?;
+    refresh_tray_tooltip(&app);
+    Ok(msg)
 }
 
 #[tauri::command]
@@ -760,14 +1062,18 @@ fn get_logs(state: State<'_, Shared>, which: String, lines: Option<usize>) -> Re
     let root = state.lock().project_root.clone();
     let n = lines.unwrap_or(40).clamp(5, 200);
     let stem = match which.as_str() {
-        "bot" | "dashboard" => which.as_str(),
-        _ => return Err("which must be 'bot' or 'dashboard'".into()),
+        "bot" | "dashboard" | "crypto" | "exchange" => which.as_str(),
+        _ => {
+            return Err(
+                "which must be 'bot', 'dashboard', 'crypto', or 'exchange'".into(),
+            )
+        }
     };
     let err_path = desktop_log_dir(&root).join(format!("{stem}.stderr.log"));
     let out_path = desktop_log_dir(&root).join(format!("{stem}.stdout.log"));
     let mut parts = Vec::new();
     let e = last_nonzero_lines(&err_path, n);
-    let o = last_nonzero_lines(&out_path, n.min(20));
+    let o = last_nonzero_lines(&out_path, n.min(30));
     if !e.is_empty() {
         parts.push(format!("=== {stem} stderr ===\n{e}"));
     }
@@ -779,6 +1085,46 @@ fn get_logs(state: State<'_, Shared>, which: String, lines: Option<usize>) -> Re
     } else {
         Ok(parts.join("\n\n"))
     }
+}
+
+#[tauri::command]
+fn start_crypto_session(
+    state: State<'_, Shared>,
+    max_polls: Option<u32>,
+    paper_strategy: Option<bool>,
+    interval: Option<f64>,
+) -> Result<String, String> {
+    start_crypto_session_inner(
+        &state,
+        max_polls,
+        paper_strategy.unwrap_or(false),
+        interval,
+    )
+}
+
+#[tauri::command]
+fn stop_crypto_session(state: State<'_, Shared>) -> Result<String, String> {
+    stop_crypto_session_inner(&state)
+}
+
+#[tauri::command]
+fn start_exchange_session(
+    state: State<'_, Shared>,
+    max_polls: Option<u32>,
+    trade_signals: Option<bool>,
+    interval: Option<f64>,
+) -> Result<String, String> {
+    start_exchange_session_inner(
+        &state,
+        max_polls,
+        trade_signals.unwrap_or(false),
+        interval,
+    )
+}
+
+#[tauri::command]
+fn stop_exchange_session(state: State<'_, Shared>) -> Result<String, String> {
+    stop_exchange_session_inner(&state)
 }
 
 #[tauri::command]
@@ -935,6 +1281,49 @@ fn apply_suggestion_cmd(
     )
 }
 
+/// Path C: `chancetime crypto …` (scan / run / status / hub).
+#[tauri::command]
+async fn crypto_cli_cmd(
+    state: State<'_, Shared>,
+    args: Vec<String>,
+) -> Result<String, String> {
+    let root = state.lock().project_root.clone();
+    if args.is_empty() {
+        return Err("crypto_cli_cmd needs args e.g. [\"scan\"]".into());
+    }
+    let mut full = vec!["crypto".to_string()];
+    full.extend(args);
+    let root_c = root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let refs: Vec<&str> = full.iter().map(|s| s.as_str()).collect();
+        // Scans hit network — allow longer timeout
+        cli_capture_timeout(&root_c, &refs, Duration::from_secs(120))
+    })
+    .await
+    .map_err(|e| format!("crypto task join: {e}"))?
+}
+
+/// Path D: `chancetime exchange …` (scan / run / status / signals).
+#[tauri::command]
+async fn exchange_cli_cmd(
+    state: State<'_, Shared>,
+    args: Vec<String>,
+) -> Result<String, String> {
+    let root = state.lock().project_root.clone();
+    if args.is_empty() {
+        return Err("exchange_cli_cmd needs args e.g. [\"scan\"]".into());
+    }
+    let mut full = vec!["exchange".to_string()];
+    full.extend(args);
+    let root_c = root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let refs: Vec<&str> = full.iter().map(|s| s.as_str()).collect();
+        cli_capture_timeout(&root_c, &refs, Duration::from_secs(120))
+    })
+    .await
+    .map_err(|e| format!("exchange task join: {e}"))?
+}
+
 #[tauri::command]
 async fn clear_book_cmd(
     state: State<'_, Shared>,
@@ -1017,10 +1406,10 @@ fn try_setup_tray(app: &tauri::App) -> Result<(), String> {
         .clone();
 
     let build_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        TrayIconBuilder::new()
+        TrayIconBuilder::with_id("main")
             .icon(icon)
             .menu(&menu)
-            .tooltip("Chance Time")
+            .tooltip("Chance Time — bot stopped")
             .on_menu_event(|app, event| match event.id.as_ref() {
                 "show" => {
                     if let Some(w) = app.get_webview_window("main") {
@@ -1039,10 +1428,12 @@ fn try_setup_tray(app: &tauri::App) -> Result<(), String> {
                         Some("paper".into()),
                         None, // continuous
                     );
+                    refresh_tray_tooltip(app);
                 }
                 "stop_bot" => {
                     let st = app.state::<Shared>();
                     let _ = stop_bot_inner(&st);
+                    refresh_tray_tooltip(app);
                 }
                 "start_dash" => {
                     let st = app.state::<Shared>();
@@ -1051,12 +1442,14 @@ fn try_setup_tray(app: &tauri::App) -> Result<(), String> {
                 "kill" => {
                     let st = app.state::<Shared>();
                     let _ = kill_all_inner(&st);
+                    refresh_tray_tooltip(app);
                 }
                 "quit" => {
                     {
                         let st = app.state::<Shared>();
                         let _ = kill_all_inner(&st);
                     }
+                    refresh_tray_tooltip(app);
                     app.exit(0);
                 }
                 _ => {}
@@ -1169,18 +1562,37 @@ pub fn run() {
             clear_book_cmd,
             readiness_cmd,
             sync_positions_cmd,
+            crypto_cli_cmd,
+            exchange_cli_cmd,
+            start_crypto_session,
+            stop_crypto_session,
+            start_exchange_session,
+            stop_exchange_session,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if TRAY_OK.load(Ordering::Relaxed) {
+                    // Hide to tray — bot keeps running; tooltip warns if so
                     api.prevent_close();
                     let _ = window.hide();
+                    refresh_tray_tooltip(window.app_handle());
                 } else {
+                    // No tray: closing the window quits and must kill children
                     let st = window.app_handle().state::<Shared>();
                     let _ = kill_all_inner(&st);
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Chance Time desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building Chance Time desktop")
+        .run(|app_handle, event| {
+            // Any full process exit path — ensure bot/dashboard cannot outlive the shell
+            if matches!(
+                event,
+                tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+            ) {
+                let st = app_handle.state::<Shared>();
+                let _ = kill_all_inner(&st);
+            }
+        });
 }

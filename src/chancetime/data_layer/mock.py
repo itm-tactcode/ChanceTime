@@ -45,6 +45,7 @@ def _m(
         yes_bid_size=bid_size if with_bbo else None,
         yes_ask_size=ask_size if with_bbo else None,
         has_bbo=with_bbo,
+        synthetic=True,
     )
 
 
@@ -126,6 +127,13 @@ class MockMarketClient(MarketDataClient):
                 volume=50.0,
                 days=1,
             ),
+            # Same-market complement arb fixture: ask_yes + ask_no < 1 after fees
+            # mid 0.40, spread 0.04 → yes_ask 0.42, no_ask = 1-0.38 = 0.62 → sum 1.04 (no)
+            # tighter: mid 0.45, spread 0.02 → yes_ask 0.46, no_ask 0.56 → sum 1.02 (no)
+            # need sum < 1 - fee: mid 0.48, spread 0.02 → yes_ask 0.49, yes_bid 0.47
+            # no_ask = 1-0.47 = 0.53 → sum 1.02 still no
+            # Use wide inverted book: yes_ask 0.40, yes_bid 0.55 impossible normally —
+            # craft via raw BBO after _m
             # Backward-compatible ids used by older tests
             _m(
                 id="mock-fed-cut-2026",
@@ -145,4 +153,27 @@ class MockMarketClient(MarketDataClient):
                 days=180,
             ),
         ]
+        # Explicit complement gap for strategy tests / paper smoke
+        gap = _m(
+            id="mock-complement-gap",
+            platform=Platform.MOCK,
+            title="Mock binary with executable YES+NO < 1",
+            yes=0.40,
+            liquidity=25_000.0,
+            volume=50_000.0,
+            days=0,  # close_time = now + 0 days → soon; fix below
+            spread=0.02,
+        )
+        # Force executable complement: yes_ask=0.41, yes_bid=0.65 → no_ask=0.35, sum=0.76
+        gap = gap.model_copy(
+            update={
+                "yes_bid": 0.65,
+                "yes_ask": 0.41,
+                "yes_price": 0.53,
+                "no_price": 0.47,
+                "has_bbo": True,
+                "close_time": datetime.now(UTC) + timedelta(hours=2),
+            }
+        )
+        samples.append(gap)
         return samples[:limit]

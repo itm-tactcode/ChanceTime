@@ -189,6 +189,20 @@ def create_app(
             return default_book
         return b
 
+    @app.get("/api/modules")
+    def api_modules() -> dict[str, Any]:
+        """Multi-module registry (US venues, crypto Up/Down, planned)."""
+        from chancetime.modules import list_modules
+
+        return {"modules": list_modules()}
+
+    @app.get("/api/hub")
+    def api_hub() -> dict[str, Any]:
+        """Combined portfolio snapshot across modules."""
+        from chancetime.crypto_updown.hub import combined_portfolio
+
+        return combined_portfolio()
+
     @app.get("/api/health")
     def health() -> dict[str, Any]:
         return {

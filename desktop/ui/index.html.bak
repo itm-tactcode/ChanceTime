@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chance Time</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <h1>Chance Time</h1>
+        <p class="sub">Paper bot + local books · see docs/ORIENTATION.md · not financial advice</p>
+      </div>
+      <nav class="tabs" role="tablist">
+        <button type="button" class="tab active" data-tab="control" role="tab">Control</button>
+        <button type="button" class="tab" data-tab="ops" role="tab">Ops</button>
+        <button type="button" class="tab" data-tab="settings" role="tab">Settings</button>
+        <button type="button" class="tab" data-tab="monitor" role="tab">Monitor</button>
+      </nav>
+      <div class="header-status">
+        <span id="modeBadge" class="badge paper">PAPER</span>
+        <span id="miniBot" class="pill">bot —</span>
+        <span id="miniDash" class="pill">api —</span>
+      </div>
+    </header>
+
+    <!-- CONTROL -->
+    <main id="panel-control" class="panel active" role="tabpanel">
+      <section class="card status-card">
+        <div class="row now-strip">
+          <span class="label">Now</span>
+          <span id="nowStrip" class="mono small">—</span>
+        </div>
+        <div id="bagBanner" class="bag-banner" hidden></div>
+        <div class="row"><span class="label">Bot</span><span id="botState" class="mono">—</span></div>
+        <div class="row"><span class="label">API server</span><span id="dashState" class="mono">—</span></div>
+        <div class="row"><span class="label">Port 8787</span><span id="portState" class="mono">—</span></div>
+        <div class="row"><span class="label">Tray</span><span id="trayState" class="mono">—</span></div>
+        <div class="row"><span class="label">Project</span><span id="projectRoot" class="mono small">—</span></div>
+      </section>
+
+      <section class="card">
+        <div class="form-grid">
+          <label>Account
+            <select id="accountSelect" class="dark-select">
+              <option value="paper">paper</option>
+              <option value="paper_bag">paper_bag</option>
+              <option value="live">live</option>
+            </select>
+          </label>
+          <label>Config path <input id="configPath" type="text" value="config/default.yaml" /></label>
+        </div>
+        <div class="preset-row" style="margin-top:0.5rem">
+          <button type="button" class="slim" data-cfg="config/default.yaml">default.yaml</button>
+          <button type="button" class="slim" data-cfg="config/paper_bag.yaml">paper_bag.yaml</button>
+          <button type="button" class="slim" data-cfg="config/live_micro.yaml">live_micro.yaml</button>
+        </div>
+        <p class="hint">
+          <strong>Poll interval</strong> in Settings (e.g. 30s) is wait <em>between</em> polls, not how long the bot runs.
+          Continuous runs until you Stop.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Start bot</h2>
+        <div class="grid">
+          <button id="btnStartBotCont" class="primary">Run continuously</button>
+          <button id="btnStopBot">Stop bot</button>
+        </div>
+        <p class="hint" style="margin-top:0.5rem">Session (stops after N polls — good for a quick test):</p>
+        <div class="preset-row">
+          <button type="button" class="slim session-btn" data-polls="5">5 polls</button>
+          <button type="button" class="slim session-btn" data-polls="20">20 polls</button>
+          <button type="button" class="slim session-btn" data-polls="60">60 polls</button>
+          <button type="button" class="slim session-btn" data-polls="120">120 polls</button>
+        </div>
+        <p class="hint">At 30s/poll: 20 ≈ 10 min, 60 ≈ 30 min, 120 ≈ 1 hr. Then stops by itself.</p>
+      </section>
+
+      <section class="grid">
+        <button id="btnStartDash" class="primary">Start API</button>
+        <button id="btnStopDash">Stop API</button>
+        <button id="btnGoOps">Ops</button>
+        <button id="btnGoSettings">Settings</button>
+        <button id="btnGoMonitor">Monitor</button>
+        <button id="btnOpenBrowser">Browser</button>
+        <button id="btnKill" class="danger">Kill all (incl. orphans)</button>
+      </section>
+
+      <section class="card">
+        <div class="row actions">
+          <h2 class="card-title" style="margin:0;flex:1">Doctor</h2>
+          <button id="btnDoctor" type="button" class="primary slim">Run doctor</button>
+        </div>
+        <pre id="doctorOut" class="log proc-logs">(run doctor)</pre>
+      </section>
+
+      <section class="card">
+        <div class="row actions">
+          <h2 class="card-title" style="margin:0;flex:1">Process logs</h2>
+          <button id="btnLogsBot" type="button" class="slim">Bot</button>
+          <button id="btnLogsDash" type="button" class="slim">API</button>
+        </div>
+        <pre id="procLogs" class="log proc-logs">(click Bot / API)</pre>
+      </section>
+      <pre id="log" class="log"></pre>
+    </main>
+
+    <!-- OPS -->
+    <main id="panel-ops" class="panel" role="tabpanel" hidden>
+      <p class="hint card-hint">
+        Tab opens instantly; data loads in the background. Lost?
+        <code>docs/ORIENTATION.md</code> · gates:
+        <code>docs/LIVE_READINESS.md</code>
+      </p>
+
+      <section class="card">
+        <h2 class="card-title">Readiness gates</h2>
+        <pre id="readinessOut" class="log proc-logs">Checklist loads after tab paint…</pre>
+        <button id="btnReadiness" type="button" class="slim primary">Refresh checklist</button>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Accounts</h2>
+        <pre id="accountsOut" class="log proc-logs">Accounts load after tab paint…</pre>
+        <button id="btnAccounts" type="button" class="slim">Refresh accounts</button>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Digest & export</h2>
+        <div class="row actions">
+          <button id="btnDigest" type="button" class="primary slim">Digest</button>
+          <button id="btnDigestSend" type="button" class="slim">Digest + Telegram</button>
+          <button id="btnExport" type="button" class="slim">Export CSVs</button>
+          <button id="btnSync" type="button" class="slim">Sync positions (live)</button>
+        </div>
+        <pre id="opsOut" class="log proc-logs">(results)</pre>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">History</h2>
+        <div class="row actions">
+          <button id="btnHistList" type="button" class="slim">List history</button>
+          <button id="btnHistRecord" type="button" class="primary slim">Record now</button>
+        </div>
+        <pre id="histOut" class="log proc-logs">(history files)</pre>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Presets</h2>
+        <div id="presetList" class="preset-list"></div>
+        <p class="hint">Applies to <code>user.yaml</code>. Restart bot after apply.</p>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Stats suggestions</h2>
+        <div class="row actions">
+          <button id="btnSuggest" type="button" class="primary slim">Load suggestions</button>
+          <button id="btnClearBook" type="button" class="slim danger">Clear paper book</button>
+        </div>
+        <div id="suggestList" class="suggest-list"></div>
+        <p class="hint">
+          Misses with <code>max_positions</code> / <code>already_open</code> = bag full.
+          Clear book or raise max open positions. Suggestions optional apply.
+        </p>
+      </section>
+    </main>
+
+    <!-- SETTINGS -->
+    <main id="panel-settings" class="panel" role="tabpanel" hidden>
+      <p class="hint card-hint">
+        Writes <code>config/user.yaml</code> only.
+        With <strong>hot-reload risk</strong> on, risk/strategy caps apply next poll;
+        data source / discovery / LLM path still need a bot restart.
+      </p>
+      <section class="card">
+        <h2 class="card-title">Bot</h2>
+        <div class="form-grid">
+          <label>Poll seconds <input id="pollInterval" type="number" min="5" max="3600" class="num" /></label>
+          <label class="check"><input type="checkbox" id="shadowMode" /> Shadow mode (no orders)</label>
+          <label class="check" title="Re-read risk + strategy caps/weights from YAML each poll">
+            <input type="checkbox" id="hotReloadRisk" /> Hot-reload risk knobs
+          </label>
+        </div>
+      </section>
+      <section class="card">
+        <h2 class="card-title">Data & history</h2>
+        <div class="form-grid">
+          <label>Source
+            <select id="dataSource" class="dark-select">
+              <option value="mock">mock</option>
+              <option value="kalshi">kalshi</option>
+              <option value="polymarket">polymarket</option>
+              <option value="both">both</option>
+            </select>
+          </label>
+          <label>Max markets <input id="maxMarkets" type="number" min="1" max="500" class="num" /></label>
+          <label title="0 = off. Dual-venue search every N polls when source=both">Discovery every N polls
+            <input id="discoveryEvery" type="number" min="0" max="100" class="num" />
+          </label>
+          <label title="Per-venue limit during deep discovery">Discovery limit
+            <input id="discoveryLimit" type="number" min="20" max="500" class="num" />
+          </label>
+          <label class="check"><input type="checkbox" id="historyEnabled" /> Record markets/BBO each poll</label>
+        </div>
+      </section>
+      <section class="card">
+        <h2 class="card-title">Risk & size</h2>
+        <div class="form-grid">
+          <label>Max position $ <input id="maxPos" type="number" step="1" class="num" /></label>
+          <label>Max daily loss $ <input id="maxLoss" type="number" step="1" class="num" /></label>
+          <label>Max open positions <input id="maxOpen" type="number" class="num" /></label>
+          <label>Default cap / strategy <input id="maxOpenPerStrat" type="number" class="num" title="Default max_open_per_strategy (0=unlimited). Override per row below." /></label>
+          <label>Family exposure $ <input id="maxFam" type="number" class="num" title="Sports/macro/crypto/politics bag" /></label>
+          <label title="Tighter same-series cluster (e.g. all KXNBA-27). 0 = off">Cluster exposure $
+            <input id="maxCluster" type="number" step="1" class="num" />
+          </label>
+          <label title="Max open notional as fraction of cash basis (0–1). 0 = off">Max deploy %
+            <input id="maxDeployPct" type="number" step="0.05" min="0" max="1" class="num" />
+          </label>
+          <label title="Skip markets resolving sooner than this (0 = off)">Min hours to close
+            <input id="minHoursClose" type="number" step="0.5" min="0" class="num" />
+          </label>
+          <label title="Skip far-horizon markets (0 = off)">Max days to close
+            <input id="maxDaysClose" type="number" step="1" min="0" class="num" />
+          </label>
+          <label>Max BBO spread <input id="maxSpread" type="number" step="0.01" min="0" class="num" title="Reject when ask−bid wider (0 = off)" /></label>
+          <label>Take profit % <input id="tp" type="number" step="0.01" class="num" /></label>
+          <label>Stop loss % <input id="sl" type="number" step="0.01" class="num" /></label>
+          <label>Order size $ <input id="orderSize" type="number" step="0.5" class="num" /></label>
+        </div>
+      </section>
+      <section class="card">
+        <h2 class="card-title">LLM</h2>
+        <div class="form-grid">
+          <label class="check"><input type="checkbox" id="llmEnabled" /> Enabled</label>
+          <label>Daily budget $ <input id="llmBudget" type="number" step="0.5" class="num" /></label>
+          <label title="llm_calibrated max tool/calibrate calls per poll">Calibrate calls / poll
+            <input id="llmMaxCalls" type="number" min="0" max="10" step="1" class="num" />
+          </label>
+        </div>
+      </section>
+      <section class="card">
+        <h2 class="card-title">Strategies</h2>
+        <p class="hint" style="margin:0 0 0.5rem">
+          <strong>w</strong> = risk weight · <strong>cap</strong> = max open for that strategy (0 = unlimited).
+          Caps/weights hot-reload when enabled; on/off still best after restart.
+        </p>
+        <div class="strat-grid" id="stratGrid"></div>
+      </section>
+      <div class="row actions" style="padding:0 0.25rem 1rem">
+        <button id="btnLoadKnobs" type="button">Reload</button>
+        <button id="btnSaveKnobs" type="button" class="primary">Save user.yaml</button>
+      </div>
+      <p id="knobsPath" class="hint mono small" style="padding:0 1rem 1rem"></p>
+    </main>
+
+    <!-- MONITOR -->
+    <main id="panel-monitor" class="panel" role="tabpanel" hidden>
+      <div class="monitor-toolbar" id="monitorToolbar" data-state="offline">
+        <span id="monitorHint" class="mono monitor-status">API …</span>
+        <span id="monitorLiveHint" class="mono monitor-live-hint" title="Embedded page auto-refreshes">·</span>
+        <div class="book-switch" role="group" aria-label="Book">
+          <button type="button" id="btnBookPaper" class="slim book-btn active" data-book="paper">PAPER</button>
+          <button type="button" id="btnBookLive" class="slim book-btn" data-book="live">LIVE</button>
+        </div>
+        <div class="monitor-actions">
+          <button id="btnEnsureDash" type="button" class="primary slim action-start">Start API</button>
+          <button id="btnReloadFrame" type="button" class="slim">Reload view</button>
+          <button id="btnOpenBrowser2" type="button" class="slim ghost">Browser</button>
+        </div>
+      </div>
+      <div class="monitor-body">
+        <div id="monitorPlaceholder" class="monitor-placeholder"><p class="muted">Connecting…</p></div>
+        <iframe id="dashFrame" class="dash-frame" title="monitor"
+          sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
+      </div>
+    </main>
+
+    <script src="main.js"></script>
+  </body>
+</html>

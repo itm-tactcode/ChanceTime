@@ -44,6 +44,13 @@ class BaseStrategy(ABC):
     def __init__(self, **params: Any) -> None:
         self.params = params
         self.enabled: bool = bool(params.get("enabled", True))
+        # Named data.profiles.* key — bot builds once per poll per distinct name
+        self.universe: str = str(params.get("universe") or "broad")
+
+    @property
+    def universe_name(self) -> str:
+        """Market universe profile this strategy should receive."""
+        return self.universe or "broad"
 
     @abstractmethod
     async def generate_signals(self, markets: list[Market]) -> list[Signal]:
@@ -54,4 +61,9 @@ class BaseStrategy(ABC):
         return None
 
     def describe(self) -> dict[str, Any]:
-        return {"name": self.name, "enabled": self.enabled, "params": self.params}
+        return {
+            "name": self.name,
+            "enabled": self.enabled,
+            "universe": self.universe_name,
+            "params": self.params,
+        }

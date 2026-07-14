@@ -101,13 +101,56 @@ class LLMSettings(BaseModel):
     news_brief_min_hours_between: float = 4.0
 
 
-class DataSettings(BaseModel):
-    source: str = "mock"  # mock | kalshi | polymarket | both
-    max_markets: int = 20
-    # When source=both and arb_cross is on: dual-venue search every N polls
-    # so catalogs overlap (page-1 open books rarely do). 0 = off.
+class UniverseProfileSettings(BaseModel):
+    """One named market universe (shared fetch, strategy-specific filters)."""
+
+    max_markets: int = 100
+    # Soft prefer (drop_beyond=false) or hard window (drop_beyond=true); 0 = no time filter
+    prefer_closing_within_hours: float = 0.0
+    drop_beyond_prefer: bool = False
+    keep_unknown_close: bool = True
+    queries: list[str] = Field(default_factory=list)
+    search_limit_per_query: int = 40
+    # Dual-venue discovery merge (used by dual_list profile / arb_cross)
+    deep_discovery: bool = False
     discovery_every_polls: int = 5
     discovery_limit: int = 150
+
+
+def _default_data_profiles() -> dict[str, UniverseProfileSettings]:
+    from chancetime.data_layer.profiles import default_profile_specs
+
+    return {
+        name: UniverseProfileSettings(**spec) for name, spec in default_profile_specs().items()
+    }
+
+
+class DataSettings(BaseModel):
+    source: str = "mock"  # mock | kalshi | polymarket | both
+    # Legacy global list size (also default for profiles that omit max_markets)
+    max_markets: int = 20
+    # Legacy dual-venue discovery (used if profiles.dual_list not customized)
+    discovery_every_polls: int = 5
+    discovery_limit: int = 150
+    # Legacy short-horizon knobs (applied to short_bbo profile defaults if present)
+    prefer_closing_within_hours: float = 48.0
+    short_horizon_queries: list[str] = Field(
+        default_factory=lambda: [
+            "bitcoin",
+            "btc",
+            "ethereum",
+            "eth",
+            "crypto",
+            "up or down",
+        ]
+    )
+    short_horizon_search_limit: int = 40
+    # When source is not mock, drop Market.synthetic fixtures if they ever appear
+    reject_synthetic: bool = True
+    # Named universes — strategies set strategies.<name>.universe to pick one
+    profiles: dict[str, UniverseProfileSettings] = Field(
+        default_factory=_default_data_profiles
+    )
 
 
 class HistorySettings(BaseModel):
@@ -121,6 +164,8 @@ class HistorySettings(BaseModel):
 
 class SimpleEdgeSettings(BaseModel):
     enabled: bool = True
+    # Market universe profile name (data.profiles.*)
+    universe: str = "broad"
     edge_threshold: float = 0.08
     min_liquidity_usd: float = 100.0
     default_fair_prob: float = 0.5
@@ -141,6 +186,7 @@ class SimpleEdgeSettings(BaseModel):
 
 class LLMCalibratedSettings(BaseModel):
     enabled: bool = False  # opt-in; costs tokens
+    universe: str = "llm_screen"
     edge_threshold: float = 0.10  # Phase 18: higher bar after costs
     min_liquidity_usd: float = 100.0
     min_confidence: float = 0.45
@@ -155,6 +201,7 @@ class LLMCalibratedSettings(BaseModel):
 
 class ArbCrossSettings(BaseModel):
     enabled: bool = False
+    universe: str = "dual_list"
     min_spread: float = 0.04
     fee_buffer: float = 0.03  # Phase 18: slightly higher cost buffer
     min_match_score: float = 0.72
@@ -184,8 +231,31 @@ class ArbCrossSettings(BaseModel):
     deep_discovery: bool = True
 
 
+class ComplementArbSettings(BaseModel):
+    """Same-market YES ask + NO ask < 1 (no LLM; pure BBO)."""
+
+    enabled: bool = False
+    universe: str = "short_bbo"
+    min_edge: float = 0.01
+    fee_buffer: float = 0.02
+    require_bbo: bool = True
+    min_depth_usd: float = 5.0
+    max_leg_usd: float = 20.0
+    max_pair_usd: float = 40.0
+    min_liquidity_usd: float = 0.0
+    size_by_depth: bool = True
+    # Drop mock fixtures (always true when live data also present)
+    reject_synthetic: bool = True
+    # 0 = any horizon; e.g. 6 = only markets closing within 6h
+    max_hours_to_close: float = 0.0
+    weight: float = 1.0
+    max_open: int | None = None
+    max_size_usd: float | None = None
+
+
 class MeanRevertSettings(BaseModel):
     enabled: bool = False
+    universe: str = "broad"
     move_threshold: float = 0.06
     min_liquidity_usd: float = 100.0
     history_window: int = 8
@@ -197,6 +267,7 @@ class MeanRevertSettings(BaseModel):
 
 class NewsImpulseSettings(BaseModel):
     enabled: bool = False
+    universe: str = "llm_screen"
     edge_threshold: float = 0.06
     min_liquidity_usd: float = 100.0
     min_confidence: float = 0.4
@@ -209,6 +280,7 @@ class NewsImpulseSettings(BaseModel):
 
 class MLEdgeSettings(BaseModel):
     enabled: bool = False
+    universe: str = "broad"
     model_path: str = "models/ml_edge.joblib"
     edge_threshold: float = 0.05
     min_liquidity_usd: float = 100.0
@@ -217,13 +289,56 @@ class MLEdgeSettings(BaseModel):
     max_size_usd: float | None = None
 
 
+class PairGapTrackerSettings(BaseModel):
+    """Log-only dual-list edge time series (no fills)."""
+
+    enabled: bool = True
+    universe: str = "dual_list"
+    min_match_score: float = 0.72
+    fee_buffer: float = 0.03
+    top_n: int = 40
+    log_name: str = "pair_gap"
+    weight: float = 0.0
+
+
+class TteBucketsSettings(BaseModel):
+    enabled: bool = True
+    universe: str = "short_bbo"
+    max_rows: int = 200
+    log_name: str = "tte_buckets"
+    weight: float = 0.0
+
+
+class PriceBucketsSettings(BaseModel):
+    enabled: bool = True
+    universe: str = "broad"
+    max_rows: int = 250
+    log_name: str = "price_buckets"
+    weight: float = 0.0
+
+
+class MatchQualitySettings(BaseModel):
+    enabled: bool = True
+    universe: str = "dual_list"
+    min_match_score: float = 0.55
+    long_tte_hours: float = 720.0
+    top_n: int = 60
+    log_name: str = "match_quality"
+    weight: float = 0.0
+
+
 class StrategiesSettings(BaseModel):
     simple_edge: SimpleEdgeSettings = Field(default_factory=SimpleEdgeSettings)
     llm_calibrated: LLMCalibratedSettings = Field(default_factory=LLMCalibratedSettings)
     arb_cross: ArbCrossSettings = Field(default_factory=ArbCrossSettings)
+    complement_arb: ComplementArbSettings = Field(default_factory=ComplementArbSettings)
     mean_revert: MeanRevertSettings = Field(default_factory=MeanRevertSettings)
     news_impulse: NewsImpulseSettings = Field(default_factory=NewsImpulseSettings)
     ml_edge: MLEdgeSettings = Field(default_factory=MLEdgeSettings)
+    pair_gap_tracker: PairGapTrackerSettings = Field(default_factory=PairGapTrackerSettings)
+    tte_buckets: TteBucketsSettings = Field(default_factory=TteBucketsSettings)
+    price_buckets: PriceBucketsSettings = Field(default_factory=PriceBucketsSettings)
+    match_quality: MatchQualitySettings = Field(default_factory=MatchQualitySettings)
 
 
 class ExecutionSettings(BaseModel):

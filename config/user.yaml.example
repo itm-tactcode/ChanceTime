@@ -1,34 +1,121 @@
 # Copy to config/user.yaml (gitignored) for personal non-secret overrides.
-# Desktop Settings tab / `chancetime user-config apply` / POST /api/user-config write here.
-# Never put API keys in this file.
+# Desktop Settings / `chancetime user-config apply` write here.
+# Never put API keys here — use .env + secrets/.
 #
 #   cp config/user.yaml.example config/user.yaml
 #
-# Merge order: --config path  <  config/user.yaml  <  secrets in .env
+# Merge order: default.yaml  <  user.yaml  <  secrets in .env
 
 bot:
-  poll_interval_seconds: 30
-  # shadow_mode: true   # signals only, no fills
+  poll_interval_seconds: 45.0
+  shadow_mode: false
+  hot_reload_risk: true
 
-# data:
-#   source: mock   # mock | kalshi | polymarket | both
+data:
+  source: both   # mock | kalshi | polymarket | both
+  # Profiles are built only when an enabled strategy selects them
+  profiles:
+    broad:
+      max_markets: 150
+      prefer_closing_within_hours: 0
+    short_bbo:
+      max_markets: 300
+      prefer_closing_within_hours: 48
+      queries: [bitcoin, btc, ethereum, eth, crypto, "up or down"]
+    dual_list:
+      max_markets: 250
+      prefer_closing_within_hours: 720
+      drop_beyond_prefer: true
+      keep_unknown_close: false
+      deep_discovery: true
+      discovery_every_polls: 3
+      discovery_limit: 250
+    llm_screen:
+      max_markets: 40
+      prefer_closing_within_hours: 168
 
-# risk:
-#   max_position_usd: 50.0
-#   max_daily_loss_usd: 25.0
-#   max_open_positions: 10
-#   max_family_exposure_usd: 100.0
+risk:
+  max_position_usd: 50.0
+  max_daily_loss_usd: 100.0
+  max_open_positions: 20
+  max_days_to_close: 45.0
+  min_net_edge: 0.03
+  max_open_per_strategy: 8
 
-# execution:
-#   default_order_size_usd: 10.0
+execution:
+  default_order_size_usd: 15.0
+  use_bbo_paper: true
+  paper_fee_bps: 70
 
-# llm:
-#   enabled: true
-#   daily_budget_usd: 5.0
+llm:
+  enabled: false
+  daily_budget_usd: 3.0
+  tools_enabled: false
+  news_brief_enabled: false
 
-# strategies:
-#   mean_revert:
-#     enabled: true
-#     weight: 1.0
-#   ml_edge:
-#     enabled: true
+strategies:
+  simple_edge:
+    enabled: false
+    universe: broad
+    weight: 0.5
+    edge_threshold: 0.12
+    prior_mode: blend
+    min_history: 3
+    max_open: 4
+
+  arb_cross:
+    enabled: true
+    universe: dual_list
+    weight: 1.2
+    require_bbo: true
+    fee_buffer: 0.03
+    use_llm_match: false
+    deep_discovery: true
+    max_open: 4
+
+  complement_arb:
+    enabled: true
+    universe: short_bbo
+    weight: 1.0
+    min_edge: 0.01
+    fee_buffer: 0.02
+    max_open: 8
+
+  mean_revert:
+    enabled: false
+    universe: broad
+    weight: 0.5
+    max_open: 2
+
+  ml_edge:
+    enabled: false
+    universe: broad
+    weight: 0.5
+    max_open: 2
+
+  llm_calibrated:
+    enabled: false
+    universe: llm_screen
+    weight: 1.0
+    max_llm_calls_per_poll: 2
+    max_open: 4
+
+  news_impulse:
+    enabled: false
+    universe: llm_screen
+    weight: 1.0
+    max_open: 2
+
+  # Log-only research (data/research/*.jsonl) — safe to leave on
+  pair_gap_tracker:
+    enabled: true
+    universe: dual_list
+  tte_buckets:
+    enabled: true
+    universe: short_bbo
+  price_buckets:
+    enabled: true
+    universe: broad
+  match_quality:
+    enabled: true
+    universe: dual_list

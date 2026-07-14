@@ -166,10 +166,28 @@ class ArbCrossStrategy(BaseStrategy):
         if not self.enabled:
             return []
 
+        # Never mix mock fixtures with live books. Pure-synthetic feeds (source=mock)
+        # still work for tests; mixed feed drops synthetic legs.
+        real = [m for m in markets if not m.synthetic]
+        synthetic = [m for m in markets if m.synthetic]
+        if real and synthetic:
+            log.warning(
+                "arb_cross_dropped_synthetic",
+                dropped=len(synthetic),
+                kept=len(real),
+                msg="Mock markets excluded while live data present",
+            )
+            markets = real
+        elif synthetic and not real:
+            markets = synthetic  # mock-only session
+        else:
+            markets = real
+
         by_plat = split_by_platform(markets)
         kalshi = by_plat.get(Platform.KALSHI, [])
         pm = by_plat.get(Platform.POLYMARKET, [])
         mock = by_plat.get(Platform.MOCK, [])
+        # Legacy: Platform.MOCK ids only (synthetic dual-list uses KALSHI/POLYMARKET platforms)
         if mock and (not kalshi or not pm):
             kalshi = kalshi or [m for m in mock if m.id.startswith("kalshi-") or "kalshi" in m.id]
             pm = pm or [m for m in mock if m.id.startswith("pm-") or "poly" in m.id]
@@ -183,9 +201,19 @@ class ArbCrossStrategy(BaseStrategy):
             )
             return []
 
+        # Discovery may stash pairs on last_pairs; always intersect with *current*
+        # universe so mock fed-cut pairs cannot survive into a live feed.
+        live_mode = any(not m.synthetic for m in markets)
+        id_set = {m.id for m in markets}
+        pairs: list[MarketPair] = []
         if self.last_pairs:
-            pairs = self.last_pairs
-        else:
+            for p in self.last_pairs:
+                if p.left.id not in id_set or p.right.id not in id_set:
+                    continue
+                if live_mode and (p.left.synthetic or p.right.synthetic):
+                    continue
+                pairs.append(p)
+        if not pairs:
             pairs = await self._build_pairs(kalshi, pm)
             self.last_pairs = pairs
         log.info(

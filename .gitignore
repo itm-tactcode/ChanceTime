@@ -81,6 +81,12 @@ data/exports/*
 !data/exports/.gitkeep
 data/history/*
 !data/history/.gitkeep
+data/research/*
+!data/research/.gitkeep
+data/crypto_paper.db
+data/crypto_paper.db-*
+data/crypto_exchange_paper.db
+data/crypto_exchange_paper.db-*
 data/desktop-logs/
 data/llm_spend.json
 data/llm_spend.tmp

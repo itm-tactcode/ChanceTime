@@ -138,13 +138,15 @@ class Bot:
         self._discover_kalshi: Any = None
         self._discover_pm: Any = None
         self._discovery_cache: list[Any] = []
-        ac = cfg.strategies.arb_cross
+        self._dual_cache: list[Any] = []
+        self._universes: dict[str, list[Any]] = {}
+        # Dual-venue discovery clients when any dual_list profile or arb_cross wants them
         src = cfg.data.source.lower().strip()
-        want_discovery = (
-            ac.enabled
-            and getattr(ac, "deep_discovery", True)
-            and src in {"both", "multi", "kalshi+polymarket"}
-            and int(getattr(cfg.data, "discovery_every_polls", 0) or 0) > 0
+        ac = cfg.strategies.arb_cross
+        dual_prof = (getattr(cfg.data, "profiles", None) or {}).get("dual_list")
+        want_discovery = src in {"both", "multi", "kalshi+polymarket"} and (
+            (ac.enabled and getattr(ac, "deep_discovery", True))
+            or (dual_prof is not None and getattr(dual_prof, "deep_discovery", False))
         )
         if want_discovery:
             from chancetime.data_layer.kalshi import KalshiClient
@@ -169,6 +171,99 @@ class Bot:
 
     def request_stop(self) -> None:
         self._stop.set()
+
+    def _needed_universe_names(self) -> set[str]:
+        return {s.universe_name for s in self.strategies if s.enabled}
+
+    def _profile_settings(self, name: str) -> Any:
+        """Resolve data.profiles[name] with legacy fallbacks."""
+        from chancetime.utils.config import UniverseProfileSettings
+
+        profiles = getattr(self.cfg.data, "profiles", None) or {}
+        if name in profiles:
+            return profiles[name]
+        # Fallback: invent from legacy global knobs
+        d = self.cfg.data
+        if name == "short_bbo":
+            return UniverseProfileSettings(
+                max_markets=max(d.max_markets, 100),
+                prefer_closing_within_hours=d.prefer_closing_within_hours,
+                queries=list(d.short_horizon_queries or []),
+                search_limit_per_query=d.short_horizon_search_limit,
+            )
+        if name == "dual_list":
+            return UniverseProfileSettings(
+                max_markets=max(d.max_markets, 100),
+                prefer_closing_within_hours=720.0,
+                drop_beyond_prefer=True,
+                keep_unknown_close=False,
+                deep_discovery=True,
+                discovery_every_polls=d.discovery_every_polls,
+                discovery_limit=d.discovery_limit,
+                queries=["nba", "mlb", "fed", "election", "bitcoin"],
+            )
+        if name == "llm_screen":
+            return UniverseProfileSettings(
+                max_markets=min(40, d.max_markets),
+                prefer_closing_within_hours=168.0,
+                queries=["fed", "election", "rate"],
+            )
+        return UniverseProfileSettings(max_markets=d.max_markets)
+
+    async def _build_universes(self) -> dict[str, list[Any]]:
+        """Build each needed named universe once (shared HTTP, per-profile filters)."""
+        from chancetime.data_layer.profiles import build_universe_profile, merge_market_lists
+
+        src = self.cfg.data.source.lower().strip()
+        allow_synthetic = src == "mock"
+        names = self._needed_universe_names() or {"broad"}
+        out: dict[str, list[Any]] = {}
+
+        for name in sorted(names):
+            ps = self._profile_settings(name)
+            markets = await build_universe_profile(
+                self.data,
+                name=name,
+                max_markets=int(ps.max_markets),
+                prefer_closing_within_hours=float(ps.prefer_closing_within_hours),
+                drop_beyond_prefer=bool(ps.drop_beyond_prefer),
+                keep_unknown_close=bool(ps.keep_unknown_close),
+                queries=list(ps.queries or []),
+                search_limit_per_query=int(ps.search_limit_per_query),
+                allow_synthetic=allow_synthetic,
+            )
+            # Dual-list deep discovery only for profiles that request it
+            if bool(ps.deep_discovery) and src in {"both", "multi", "kalshi+polymarket"}:
+                every = int(ps.discovery_every_polls or 0)
+                # poll_count is pre-increment; 0 always refreshes
+                if every > 0 and (self.poll_count % every == 0 or not getattr(self, "_dual_cache", None)):
+                    markets = await self._deep_discover_into(markets, limit=int(ps.discovery_limit or 150))
+                elif getattr(self, "_dual_cache", None):
+                    markets = merge_market_lists(markets, self._dual_cache)
+            out[name] = markets
+
+        sizes = {k: len(v) for k, v in out.items()}
+        log.info("universes_built", profiles=sizes, source=src)
+        return out
+
+    async def _deep_discover_into(self, markets: list[Any], *, limit: int) -> list[Any]:
+        """Run dual-venue discovery and merge; stash for reuse between discovery polls."""
+        from chancetime.data_layer.profiles import merge_market_lists
+
+        # Reuse bot deep discover machinery (needs discover clients)
+        merged = await self._maybe_deep_discover(markets)
+        # Cache discovery pool for non-discovery polls if set
+        if self._discovery_cache:
+            self._dual_cache = list(self._discovery_cache)
+        return merge_market_lists(merged, markets) if merged else markets
+
+    async def _fetch_markets(self) -> list[Any]:
+        """Union of all strategy universes (for risk marks / history)."""
+        from chancetime.data_layer.profiles import merge_market_lists
+
+        universes = await self._build_universes()
+        self._universes = universes
+        return merge_market_lists(*universes.values()) if universes else []
 
     async def run(self, *, max_polls: int | None = None) -> None:
         mode = "PAPER" if self.cfg.paper_mode else "LIVE"
@@ -284,34 +379,41 @@ class Bot:
 
     async def _maybe_deep_discover(self, markets: list[Any]) -> list[Any]:
         """Merge dual-venue discovery pool so arb_cross can see same-event pairs."""
-        every = int(getattr(self.cfg.data, "discovery_every_polls", 0) or 0)
+        dual = self._profile_settings("dual_list")
+        every = int(
+            getattr(dual, "discovery_every_polls", None)
+            or getattr(self.cfg.data, "discovery_every_polls", 0)
+            or 0
+        )
         ac = self.cfg.strategies.arb_cross
         if (
             every <= 0
-            or not ac.enabled
-            or not getattr(ac, "deep_discovery", True)
             or self._discover_kalshi is None
             or self._discover_pm is None
         ):
             return markets
-        # poll_count is pre-increment in run(); first poll is 0 → always refresh
-        if self.poll_count % every != 0 and self._discovery_cache:
+        # Always refresh when called from dual_list profile builder on schedule
+        if self.poll_count % every != 0 and self._discovery_cache and self.poll_count > 0:
             return _merge_markets_by_id(markets, self._discovery_cache)
 
         from chancetime.data_layer.arb_discovery import deep_discover, load_aliases
 
-        limit = int(getattr(self.cfg.data, "discovery_limit", 150) or 150)
+        limit = int(
+            getattr(dual, "discovery_limit", None)
+            or getattr(self.cfg.data, "discovery_limit", 150)
+            or 150
+        )
         try:
             result = await deep_discover(
                 self._discover_kalshi,
                 self._discover_pm,
                 limit_per_venue=limit,
-                min_score=ac.min_match_score,
-                aliases={**load_aliases(), **dict(ac.aliases)},
-                llm=self.llm if ac.use_llm_match else None,
-                use_llm_match=ac.use_llm_match,
-                llm_match_min_confidence=ac.llm_match_min_confidence,
-                llm_match_max_each=ac.llm_match_max_each,
+                min_score=ac.min_match_score if ac else 0.72,
+                aliases={**load_aliases(), **dict(getattr(ac, "aliases", None) or {})},
+                llm=self.llm if getattr(ac, "use_llm_match", False) else None,
+                use_llm_match=bool(getattr(ac, "use_llm_match", False)),
+                llm_match_min_confidence=getattr(ac, "llm_match_min_confidence", 0.75),
+                llm_match_max_each=getattr(ac, "llm_match_max_each", 24),
                 llm_match_band_low=getattr(ac, "llm_match_band_low", 0.40),
                 llm_bulk_fallback=getattr(ac, "llm_bulk_fallback", False),
             )
@@ -322,7 +424,6 @@ class Bot:
             return markets
 
         self._discovery_cache = [*result.kalshi, *result.polymarket]
-        # Stash pairs on arb strategy so it does not re-pair from a thinner pool
         for strategy in self.strategies:
             if strategy.name == "arb_cross" and result.pairs:
                 strategy.last_pairs = result.pairs  # type: ignore[attr-defined]
@@ -411,9 +512,14 @@ class Bot:
         try:
             self._maybe_hot_reload_risk()
             await self._maybe_refresh_news_brief()
-            markets = await self.data.list_markets(limit=self.cfg.data.max_markets)
-            markets = await self._maybe_deep_discover(markets)
-            log.info("markets_fetched", count=len(markets), source=self.cfg.data.source)
+            markets = await self._fetch_markets()
+            universes = getattr(self, "_universes", {}) or {}
+            log.info(
+                "markets_fetched",
+                count=len(markets),
+                source=self.cfg.data.source,
+                by_profile={k: len(v) for k, v in universes.items()},
+            )
             if self.history.enabled:
                 self.history.record_markets(
                     markets,
@@ -445,7 +551,8 @@ class Bot:
                 if not strategy.enabled:
                     continue
                 try:
-                    sigs = await strategy.generate_signals(markets)
+                    slice_m = universes.get(strategy.universe_name) or markets
+                    sigs = await strategy.generate_signals(slice_m)
                     strategy_counts[strategy.name] = len(sigs)
                     for s in sigs:
                         name_by_id[id(s)] = strategy.name
@@ -508,6 +615,7 @@ class Bot:
 
             self.execution.begin_poll()
             sig_by_market = {s.market_id: s for s in approved}
+            sig_by_side = {(s.market_id, s.side): s for s in approved}
             if self.cfg.bot.shadow_mode:
                 log.info(
                     "shadow_mode_skip_execution",
@@ -522,11 +630,17 @@ class Bot:
                 if fill.status.value not in {"filled", "simulated", "submitted"}:
                     continue
                 n_ok += 1
-                sig = sig_by_market.get(fill.market_id)
+                sig = sig_by_side.get((fill.market_id, fill.side)) or sig_by_market.get(
+                    fill.market_id
+                )
                 platform = sig.platform if sig is not None else ""
                 strat_name = ""
+                pos_key = None
                 if sig is not None:
                     strat_name = str(sig.metadata.get("strategy") or name_by_id.get(id(sig), ""))
+                    pos_key = sig.metadata.get("position_key")
+                    if pos_key is None and sig.metadata.get("same_market_complement"):
+                        pos_key = f"{fill.market_id}::{fill.side.value}"
                 self.risk.register_fill(
                     market_id=fill.market_id,
                     platform=platform,
@@ -535,6 +649,7 @@ class Bot:
                     entry_price=fill.price,
                     strategy=strat_name,
                     contracts=fill.contracts if fill.contracts > 0 else None,
+                    position_key=str(pos_key) if pos_key else None,
                 )
                 self.store.record_fill(fill, strategy=strat_name, platform=platform)
                 if strat_name:

@@ -180,10 +180,15 @@ class Portfolio:
         )
 
     def mark_to_market(self, yes_mids: dict[str, float]) -> float:
-        """Update marks; return total unrealized PnL."""
+        """Update marks; return total unrealized PnL.
+
+        Position keys may be bare market ids or ``{id}::{side}`` (complement legs).
+        """
         unrealized = 0.0
         for mid, pos in self.positions.items():
             yes = yes_mids.get(mid)
+            if yes is None and "::" in mid:
+                yes = yes_mids.get(mid.rsplit("::", 1)[0])
             if yes is None:
                 continue
             pos.last_mark = yes

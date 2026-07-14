@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from chancetime.cli import books, config_cmds, live, llm_cmds, research, run
+from chancetime.cli import books, config_cmds, crypto_cmds, exchange_cmds, live, llm_cmds, research, run
 from chancetime.flair import DISPLAY_NAME
 
 app = typer.Typer(
@@ -19,5 +19,7 @@ books.register(app)
 research.register(app)
 config_cmds.register(app)
 llm_cmds.register(app)
+crypto_cmds.register(app)
+exchange_cmds.register(app)
 
 __all__ = ["app"]

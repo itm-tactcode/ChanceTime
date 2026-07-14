@@ -1,12 +1,50 @@
-/** Chance Time desktop — Control / Ops / Settings / Monitor
+/** Chance Time desktop — Home hub + module views (US / crypto / exchange / planned)
  *
  * Tab switches paint first; data loads after (idle/deferred) so UI stays snappy.
+ * Module cards always render from FALLBACK_MODULES so navigation works offline.
  */
 
 const DASH_BASE = "http://127.0.0.1:8787/";
 let monitorBook = "paper";
 let activeTab = "control";
+let activeView = "home"; // home | us | crypto | exchange | planned
 let frameLoadedForUrl = "";
+
+/** Mirrors `chancetime.modules` — used when API/CLI hub is unavailable. */
+const FALLBACK_MODULES = [
+  {
+    id: "us_venues",
+    title: "Kalshi + Polymarket US",
+    blurb: "Account APIs, dual-list arb research, paper/live books.",
+    status: "active",
+    cli_hint: "chancetime run --account paper",
+    desktop_view: "us",
+  },
+  {
+    id: "crypto_updown",
+    title: "Global Polymarket · Crypto Up/Down",
+    blurb: "Intl CLOB 5m/15m binaries + external spot. Paper-first Path C.",
+    status: "paper_only",
+    cli_hint: "chancetime crypto run --once",
+    desktop_view: "crypto",
+  },
+  {
+    id: "crypto_exchange",
+    title: "US Crypto Exchange",
+    blurb: "Path D paper: Coinbase spot feed + optional C signals.",
+    status: "paper_only",
+    cli_hint: "chancetime exchange run --once",
+    desktop_view: "exchange",
+  },
+  {
+    id: "alpaca",
+    title: "Alpaca (stocks)",
+    blurb: "Broker equities/options — stretch module, not scheduled.",
+    status: "planned",
+    cli_hint: "(stretch)",
+    desktop_view: "planned",
+  },
+];
 
 /** @type {Record<string, unknown>} */
 const cache = {
@@ -20,6 +58,7 @@ const cache = {
 const STRAT_NAMES = [
   "simple_edge",
   "arb_cross",
+  "complement_arb",
   "mean_revert",
   "ml_edge",
   "llm_calibrated",
@@ -42,12 +81,17 @@ function $(id) {
 }
 
 function log(msg) {
+  const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
   const el = $("log");
-  if (!el) return;
-  el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}\n${el.textContent}`.slice(
-    0,
-    6000,
-  );
+  if (el) {
+    el.textContent = `${line}\n${el.textContent}`.slice(0, 6000);
+  }
+  const home = $("homeLog");
+  if (home) {
+    home.hidden = false;
+    home.textContent = `${line}\n${home.textContent}`.slice(0, 2000);
+  }
+  console.log(line);
 }
 
 function setRun(el, running, extra) {
@@ -82,7 +126,152 @@ function setLoading(el, text) {
 /**
  * Show tab shell immediately; schedule data load separately.
  */
+function switchView(name) {
+  activeView = name;
+  document.querySelectorAll(".app-view").forEach((v) => {
+    const on = v.id === `view-${name}`;
+    v.classList.toggle("active", on);
+    // Prefer hidden attribute; also set display for stubborn CSS
+    if (on) {
+      v.hidden = false;
+      v.removeAttribute("hidden");
+      v.style.display = "flex";
+    } else {
+      v.hidden = true;
+      v.setAttribute("hidden", "");
+      v.style.display = "none";
+    }
+  });
+  if (name === "home") {
+    afterPaint(() => loadHub());
+  }
+  if (name === "us") {
+    afterPaint(() => refreshStatus());
+  }
+  if (name === "crypto") {
+    afterPaint(() => {
+      switchModTab("crypto", "control");
+      refreshCryptoMonitor();
+    });
+  }
+  if (name === "exchange") {
+    afterPaint(() => {
+      switchModTab("exchange", "control");
+      refreshExchangeMonitor();
+    });
+  }
+}
+
+/** Control | Monitor tabs inside Path C / Path D (independent of US switchTab). */
+function switchModTab(mod, mtab) {
+  document.querySelectorAll(`.mod-tab[data-mod="${mod}"]`).forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.mtab === mtab);
+  });
+  document.querySelectorAll(`.mod-panel[data-mod="${mod}"]`).forEach((p) => {
+    const on = p.dataset.mtab === mtab;
+    p.classList.toggle("active", on);
+    p.hidden = !on;
+    if (on) {
+      p.style.display = "block";
+    } else {
+      p.style.display = "none";
+    }
+  });
+  if (mod === "crypto" && mtab === "monitor") {
+    afterPaint(() => refreshCryptoMonitor({ full: true }));
+  }
+  if (mod === "exchange" && mtab === "monitor") {
+    afterPaint(() => refreshExchangeMonitor({ full: true }));
+  }
+}
+
+/** Parse CLI stdout that may have log noise around JSON. */
+function parseJsonLoose(text) {
+  const raw = String(text || "").trim();
+  if (!raw) throw new Error("empty response");
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    /* continue */
+  }
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    return JSON.parse(raw.slice(start, end + 1));
+  }
+  const a0 = raw.indexOf("[");
+  const a1 = raw.lastIndexOf("]");
+  if (a0 >= 0 && a1 > a0) {
+    return JSON.parse(raw.slice(a0, a1 + 1));
+  }
+  throw new Error("no JSON object in response");
+}
+
+function openModule(mod) {
+  if (!mod) return;
+  const id = mod.id || "";
+  const v = mod.desktop_view || "";
+  if (id === "us_venues" || v === "us") {
+    switchView("us");
+    switchTab("control");
+    return;
+  }
+  if (id === "crypto_updown" || v === "crypto") {
+    switchView("crypto");
+    return;
+  }
+  if (id === "crypto_exchange" || v === "exchange") {
+    switchView("exchange");
+    return;
+  }
+  // Planned / stretch
+  if ($("plannedTitle")) $("plannedTitle").textContent = mod.title || "Coming soon";
+  if ($("plannedSub")) $("plannedSub").textContent = mod.blurb || "Planned module";
+  if ($("plannedBody")) {
+    $("plannedBody").textContent =
+      (mod.blurb || "Not implemented.") +
+      " CLI: " +
+      (mod.cli_hint || "(planned)") +
+      " · See docs/CRYPTO_VENUES.md";
+  }
+  switchView("planned");
+}
+
+function renderModuleCards(mods) {
+  const grid = $("moduleGrid");
+  if (!grid) return;
+  const list = mods && mods.length ? mods : FALLBACK_MODULES;
+  grid.innerHTML = list
+    .map((m) => {
+      const isPlanned = m.status === "planned";
+      const cls = isPlanned ? "planned" : "openable";
+      const title = escapeHtml(m.title || m.id);
+      const blurb = escapeHtml(m.blurb || "");
+      const hint = escapeHtml(m.cli_hint || "");
+      const status = escapeHtml(m.status || "");
+      const cta = isPlanned ? "Coming later" : "Open desk →";
+      return `<button type="button" class="module-card ${cls}" data-id="${escapeHtml(m.id)}" data-view="${escapeHtml(m.desktop_view || "")}" ${isPlanned ? 'aria-disabled="true"' : ""}>
+        <span class="mod-status">${status}</span>
+        <strong>${title}</strong>
+        <span class="muted small">${blurb}</span>
+        <code class="small">${hint}</code>
+        <span class="mod-cta">${cta}</span>
+      </button>`;
+    })
+    .join("");
+  // Handlers attached via document-level delegation (see wireUi) so re-renders stay live
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function switchTab(name) {
+  if (activeView !== "us") switchView("us");
   activeTab = name;
   document.querySelectorAll(".tab").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.tab === name);
@@ -605,140 +794,613 @@ function setOpsOut(text) {
   if ($("opsOut")) $("opsOut").textContent = text;
 }
 
-// Tabs — only paint; data deferred inside switchTab
-document.querySelectorAll(".tab").forEach((btn) => {
-  btn.onclick = () => switchTab(btn.dataset.tab);
-});
+async function loadHub() {
+  const eq = $("hubEquity");
+  // Always keep clickable cards — never blank the grid on hub failure
+  let mods = FALLBACK_MODULES;
+  let data = null;
+  try {
+    try {
+      const r = await fetch(`${DASH_BASE}api/hub`);
+      if (r.ok) data = await r.json();
+    } catch (_) {
+      /* API offline */
+    }
+    if (!data) {
+      try {
+        const txt = await getInvoke()("crypto_cli_cmd", { args: ["hub"] });
+        data = parseJsonLoose(txt);
+      } catch (e) {
+        log(`hub cli: ${e}`);
+      }
+    }
+    if (data?.modules?.length) {
+      mods = data.modules;
+    }
+    if (eq) {
+      eq.textContent =
+        data?.combined_equity != null
+          ? `$${Number(data.combined_equity).toFixed(2)}`
+          : "— (start API or run crypto hub for equity)";
+    }
+    if ($("hubNote")) {
+      $("hubNote").textContent =
+        data?.note ||
+        "Cards work offline. Start API for live combined equity.";
+    }
+    if ($("hubMini")) {
+      $("hubMini").textContent = `modules ${mods.length}`;
+    }
+  } catch (e) {
+    log(`hub failed: ${e}`);
+    if (eq) eq.textContent = "—";
+  }
+  renderModuleCards(mods);
+}
 
-const bind = (id, fn) => {
-  const el = $(id);
-  if (el) el.onclick = fn;
-};
+let _cliBusy = false;
 
-bind("btnStartDash", () => act("start API", () => getInvoke()("start_dashboard")));
-bind("btnStopDash", () => act("stop API", () => getInvoke()("stop_dashboard")));
-bind("btnOpenBrowser", () => act("open browser", () => getInvoke()("open_dashboard")));
-bind("btnOpenBrowser2", () => act("open browser", () => getInvoke()("open_dashboard")));
-bind("btnStartBotCont", () =>
-  act("start continuous", () => getInvoke()("start_bot", startBotOpts(null))),
-);
-bind("btnStopBot", () => act("stop bot", () => getInvoke()("stop_bot")));
-document.querySelectorAll(".session-btn").forEach((btn) => {
-  btn.onclick = () => {
-    const n = Number(btn.dataset.polls) || 20;
-    act(`session ${n}`, () => getInvoke()("start_bot", startBotOpts(n)));
-  };
-});
-bind("btnKill", () => act("kill all", () => getInvoke()("kill_all")));
-bind("btnGoOps", () => switchTab("ops"));
-bind("btnGoSettings", () => switchTab("settings"));
-bind("btnGoMonitor", () => switchTab("monitor"));
-bind("btnEnsureDash", () => ensureMonitor());
-bind("btnReloadFrame", () => {
-  frameLoadedForUrl = "";
-  if ($("dashFrame")) $("dashFrame").src = dashUrl(monitorBook);
-});
-bind("btnBookPaper", () => {
-  monitorBook = "paper";
-  frameLoadedForUrl = "";
-  setMonitorLive(true);
-});
-bind("btnBookLive", () => {
-  monitorBook = "live";
-  frameLoadedForUrl = "";
-  setMonitorLive(true);
-});
-bind("btnDoctor", () => runDoctor());
-bind("btnLogsBot", () => showLogs("bot"));
-bind("btnLogsDash", () => showLogs("dashboard"));
-bind("btnLoadKnobs", () => loadKnobs({ force: true }));
-bind("btnSaveKnobs", () => saveKnobs());
-bind("btnReadiness", () =>
-  loadReadiness({ force: true }).then(() => log("readiness refreshed")),
-);
-bind("btnAccounts", () => loadAccounts({ force: true }));
-bind("btnDigest", () =>
-  act("digest", async () => {
-    setOpsOut("Running digest…");
-    const t = await getInvoke()("run_digest_cmd", { account: selectedAccount() });
-    setOpsOut(t);
-    return short(t);
-  }),
-);
-bind("btnDigestSend", () =>
-  act("digest send", async () => {
-    setOpsOut("Sending digest…");
-    const t = await getInvoke()("run_digest_cmd", {
-      account: selectedAccount(),
-      send: true,
+async function cryptoCli(args) {
+  const out = $("cryptoOut");
+  const busy = $("cryptoBusy");
+  if (_cliBusy) {
+    if (out) out.textContent = "Already running a command — wait for it to finish.";
+    return;
+  }
+  _cliBusy = true;
+  if (busy) busy.hidden = false;
+  setLoading(out, `Running: chancetime crypto ${args.join(" ")}…\n(this can take 10–30s on network)`);
+  log(`crypto ${args.join(" ")} start`);
+  try {
+    const text = await getInvoke()("crypto_cli_cmd", { args });
+    if (out) out.textContent = text || "(empty output)";
+    log(`crypto ${args.join(" ")} ok (${(text || "").length} chars)`);
+    if (activeView === "crypto") refreshCryptoMonitor({ skipLog: true });
+  } catch (e) {
+    const msg = String(e);
+    if (out) out.textContent = `ERROR: ${msg}\n\nIf this says command not found, rebuild desktop:\n  cd desktop && ./dev.sh`;
+    log(`crypto failed: ${e}`);
+  } finally {
+    _cliBusy = false;
+    if (busy) busy.hidden = true;
+  }
+}
+
+async function exchangeCli(args) {
+  const out = $("exchangeOut");
+  const busy = $("exchangeBusy");
+  if (_cliBusy) {
+    if (out) out.textContent = "Already running a command — wait for it to finish.";
+    return;
+  }
+  _cliBusy = true;
+  if (busy) busy.hidden = false;
+  setLoading(out, `Running: chancetime exchange ${args.join(" ")}…\n(this can take a few seconds)`);
+  log(`exchange ${args.join(" ")} start`);
+  try {
+    const text = await getInvoke()("exchange_cli_cmd", { args });
+    if (out) out.textContent = text || "(empty output)";
+    log(`exchange ${args.join(" ")} ok (${(text || "").length} chars)`);
+    if (activeView === "exchange") refreshExchangeMonitor({ skipLog: true });
+  } catch (e) {
+    const msg = String(e);
+    if (out) {
+      out.textContent = `ERROR: ${msg}\n\nIf exchange_cli_cmd missing, rebuild desktop:\n  cd desktop && ./dev.sh`;
+    }
+    log(`exchange failed: ${e}`);
+  } finally {
+    _cliBusy = false;
+    if (busy) busy.hidden = true;
+  }
+}
+
+function cryptoPaperStrategyOn() {
+  return !!$("cryptoPaperStrategy")?.checked;
+}
+
+function exTradeSignalsOn() {
+  return !!$("exTradeSignals")?.checked;
+}
+
+async function startCryptoSession(maxPolls) {
+  try {
+    const msg = await getInvoke()("start_crypto_session", {
+      maxPolls: maxPolls ?? null,
+      paperStrategy: cryptoPaperStrategyOn(),
+      interval: 15.0,
     });
-    setOpsOut(t);
-    return short(t);
-  }),
-);
-bind("btnExport", () =>
-  act("export", async () => {
-    setOpsOut("Exporting…");
-    const t = await getInvoke()("run_export_cmd", {
-      account: selectedAccount(),
-      year: new Date().getFullYear(),
-    });
-    setOpsOut(t);
-    return t;
-  }),
-);
-bind("btnSync", () =>
-  act("sync", async () => {
-    setOpsOut("Syncing live positions…");
-    const t = await getInvoke()("sync_positions_cmd", { account: "live" });
-    setOpsOut(t);
-    return short(t);
-  }),
-);
-bind("btnHistList", () =>
-  act("history", async () => {
-    if ($("histOut")) $("histOut").textContent = "Loading…";
-    const t = await getInvoke()("list_history_cmd");
-    if ($("histOut")) $("histOut").textContent = t || "(empty)";
-    return "history listed";
-  }),
-);
-bind("btnHistRecord", () =>
-  act("record", async () => {
-    if ($("histOut")) $("histOut").textContent = "Recording…";
-    const t = await getInvoke()("record_history_cmd", { source: "mock" });
-    if ($("histOut")) $("histOut").textContent = t;
-    return t;
-  }),
-);
-bind("btnSuggest", () => loadSuggest());
-bind("btnClearBook", () => {
+    log(msg);
+    await refreshCryptoMonitor();
+  } catch (e) {
+    log(`crypto session start failed: ${e}`);
+    if ($("cryptoLiveLog")) $("cryptoLiveLog").textContent = String(e);
+  }
+}
+
+async function stopCryptoSession() {
+  try {
+    const msg = await getInvoke()("stop_crypto_session");
+    log(msg);
+    await refreshCryptoMonitor();
+  } catch (e) {
+    log(`crypto stop failed: ${e}`);
+  }
+}
+
+async function resetCryptoBook() {
   if (
     !confirm(
-      "Delete this account's SQLite book (positions + fills)? Bot should be stopped first.",
+      "Reset Path C paper book?\n\nThis deletes all crypto paper fills, positions, and settlements, and restores $1000 cash.\n\nStop the crypto session first if it is running.",
     )
   ) {
     return;
   }
-  act("clear book", () =>
-    getInvoke()("clear_book_cmd", { account: selectedAccount() }),
-  );
-});
-
-document.querySelectorAll("[data-cfg]").forEach((btn) => {
-  btn.onclick = () => {
-    if ($("configPath")) $("configPath").value = btn.dataset.cfg;
-    log(`config → ${btn.dataset.cfg}`);
-  };
-});
-
-// Status poll is light; keep interval. Don't block first paint.
-log("Tip: docs/ORIENTATION.md — what the bot/desktop actually do");
-afterPaint(() => {
-  refresh();
-  setInterval(refresh, 3000);
-});
-
-function afterPaint(fn) {
-  requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(fn, 0)));
+  const out = $("cryptoOut");
+  setLoading(out, "Resetting crypto_paper.db…");
+  try {
+    // Ensure session is stopped so it cannot rewrite old state mid-reset
+    try {
+      await getInvoke()("stop_crypto_session");
+    } catch (_) {
+      /* ok if already stopped */
+    }
+    const text = await getInvoke()("crypto_cli_cmd", {
+      args: ["reset-book", "--yes", "--cash", "1000"],
+    });
+    if (out) out.textContent = text || "(reset ok)";
+    log("crypto paper book reset");
+    await refreshCryptoMonitor();
+  } catch (e) {
+    if (out) out.textContent = String(e);
+    log(`crypto reset failed: ${e}`);
+  }
 }
+
+async function startExchangeSession(maxPolls) {
+  try {
+    const msg = await getInvoke()("start_exchange_session", {
+      maxPolls: maxPolls ?? null,
+      tradeSignals: exTradeSignalsOn(),
+      interval: 20.0,
+    });
+    log(msg);
+    await refreshExchangeMonitor();
+  } catch (e) {
+    log(`exchange session start failed: ${e}`);
+    if ($("exLiveLog")) $("exLiveLog").textContent = String(e);
+  }
+}
+
+async function stopExchangeSession() {
+  try {
+    const msg = await getInvoke()("stop_exchange_session");
+    log(msg);
+    await refreshExchangeMonitor();
+  } catch (e) {
+    log(`exchange stop failed: ${e}`);
+  }
+}
+
+async function refreshCryptoMonitor(opts = {}) {
+  try {
+    const st = await getInvoke()("get_status");
+    const running = !!st.cryptoRunning;
+    const sessTxt = running ? "running" : "stopped";
+    const color = running ? "var(--good)" : "var(--muted)";
+    for (const id of ["cryptoSessionState", "cryptoMonSession"]) {
+      if ($(id)) {
+        $(id).textContent = sessTxt;
+        $(id).style.color = color;
+      }
+    }
+    if ($("cryptoSessionPill")) {
+      $("cryptoSessionPill").textContent = running
+        ? `session ${st.cryptoMode || "on"}`
+        : "session —";
+      $("cryptoSessionPill").classList.toggle("on", running);
+    }
+    if ($("cryptoModeState")) {
+      const strat = st.cryptoPaperStrategy ? "paper-strategy" : "shadow";
+      const polls = st.cryptoMaxPolls != null ? `${st.cryptoMaxPolls} polls` : "continuous";
+      $("cryptoModeState").textContent = running
+        ? `${st.cryptoMode || "—"} · ${strat} · ${polls}`
+        : "—";
+    }
+    if ($("cryptoLastMsg")) {
+      $("cryptoLastMsg").textContent = st.lastCryptoMsg || "—";
+    }
+    if (!opts.skipLog) {
+      try {
+        const logs = await getInvoke()("get_logs", { which: "crypto", lines: 80 });
+        if ($("cryptoLiveLog")) $("cryptoLiveLog").textContent = logs;
+      } catch (_) {
+        /* keep */
+      }
+    }
+    let bookLine = "—";
+    try {
+      const txt = await getInvoke()("crypto_cli_cmd", { args: ["status"] });
+      const j = parseJsonLoose(txt);
+      const eq = j.last_equity ?? j.equity;
+      bookLine =
+        eq != null
+          ? `eq $${Number(eq).toFixed(2)} · pos ${j.open_positions ?? 0} · fills ${j.fills_total ?? 0}`
+          : "no snapshots yet";
+    } catch (_) {
+      if (!opts.quietBook) bookLine = "— (status unavailable)";
+    }
+    for (const id of ["cryptoBookState", "cryptoMonBook"]) {
+      if ($(id)) $(id).textContent = bookLine;
+    }
+    if (opts.full) {
+      await loadCryptoScorecard();
+      await loadCryptoSignalsPanel();
+    }
+  } catch (e) {
+    log(`crypto monitor: ${e}`);
+  }
+}
+
+async function loadCryptoScorecard() {
+  const out = $("cryptoScoreOut");
+  if (!out) return;
+  try {
+    setLoading(out, "Loading scorecard…");
+    const txt = await getInvoke()("crypto_cli_cmd", { args: ["scorecard"] });
+    out.textContent = txt;
+    try {
+      const j = parseJsonLoose(txt);
+      const go = j.go_nogo || {};
+      if ($("cryptoMonGo")) {
+        $("cryptoMonGo").textContent = go.status || "—";
+      }
+    } catch (_) {
+      /* plain text ok */
+    }
+  } catch (e) {
+    out.textContent = String(e);
+  }
+}
+
+async function loadCryptoSignalsPanel() {
+  const out = $("cryptoSigOut");
+  if (!out) return;
+  try {
+    setLoading(out, "Loading signals…");
+    const txt = await getInvoke()("exchange_cli_cmd", { args: ["signals"] });
+    out.textContent = txt;
+  } catch (e) {
+    out.textContent = String(e);
+  }
+}
+
+async function refreshExchangeMonitor(opts = {}) {
+  try {
+    const st = await getInvoke()("get_status");
+    const running = !!st.exchangeRunning;
+    const sessTxt = running ? "running" : "stopped";
+    const color = running ? "var(--good)" : "var(--muted)";
+    for (const id of ["exSessionState", "exMonSession"]) {
+      if ($(id)) {
+        $(id).textContent = sessTxt;
+        $(id).style.color = color;
+      }
+    }
+    if ($("exSessionPill")) {
+      $("exSessionPill").textContent = running
+        ? `session ${st.exchangeMode || "on"}`
+        : "session —";
+      $("exSessionPill").classList.toggle("on", running);
+    }
+    if ($("exModeState")) {
+      const sig = st.exchangeTradeSignals ? "trade-signals" : "shadow";
+      const polls = st.exchangeMaxPolls != null ? `${st.exchangeMaxPolls} polls` : "continuous";
+      $("exModeState").textContent = running
+        ? `${st.exchangeMode || "—"} · ${sig} · ${polls}`
+        : "—";
+    }
+    if ($("exLastMsg")) {
+      $("exLastMsg").textContent = st.lastExchangeMsg || "—";
+    }
+    if (!opts.skipLog) {
+      try {
+        const logs = await getInvoke()("get_logs", { which: "exchange", lines: 80 });
+        if ($("exLiveLog")) $("exLiveLog").textContent = logs;
+      } catch (_) {
+        /* keep */
+      }
+    }
+    try {
+      const txt = await getInvoke()("exchange_cli_cmd", { args: ["status"] });
+      const j = parseJsonLoose(txt);
+      const eq = j.equity ?? j.last_equity;
+      const cash = j.cash;
+      const bookLine =
+        eq != null
+          ? `eq $${Number(eq).toFixed(2)} · pos ${j.open_positions ?? 0} · fills ${j.fills_total ?? 0}`
+          : "no snapshots yet";
+      if ($("exBookState")) $("exBookState").textContent = bookLine;
+      if ($("exMonBook")) $("exMonBook").textContent = bookLine;
+      if ($("exMonEquity")) {
+        $("exMonEquity").textContent =
+          cash != null && eq != null
+            ? `cash $${Number(cash).toFixed(2)} · eq $${Number(eq).toFixed(2)}`
+            : "—";
+      }
+    } catch (_) {
+      if ($("exBookState") && !opts.quietBook) {
+        $("exBookState").textContent = "— (status unavailable)";
+      }
+    }
+    if (opts.full) {
+      // keep quotes until user scans
+    }
+  } catch (e) {
+    log(`exchange monitor: ${e}`);
+  }
+}
+
+/** Central click router — works even if cards/buttons re-render. */
+function wireUi() {
+  document.addEventListener("click", (ev) => {
+    const t = ev.target;
+    if (!(t instanceof Element)) return;
+
+    // Home module cards
+    const card = t.closest(".module-card");
+    if (card && card.closest("#moduleGrid")) {
+      ev.preventDefault();
+      const id = card.getAttribute("data-id");
+      if (card.classList.contains("planned")) {
+        const mod = FALLBACK_MODULES.find((m) => m.id === id) || {
+          id,
+          title: card.querySelector("strong")?.textContent,
+          blurb: "Stretch / planned",
+          desktop_view: "planned",
+          status: "planned",
+        };
+        openModule(mod);
+        log(`planned module ${id}`);
+        return;
+      }
+      const mod =
+        FALLBACK_MODULES.find((m) => m.id === id) || {
+          id,
+          desktop_view: card.getAttribute("data-view"),
+          title: card.querySelector("strong")?.textContent,
+        };
+      // Prefer live hub module meta if present on card dataset
+      openModule({
+        ...mod,
+        id: id || mod.id,
+        desktop_view: card.getAttribute("data-view") || mod.desktop_view,
+        title: card.querySelector("strong")?.textContent || mod.title,
+        blurb: card.querySelector(".muted")?.textContent || mod.blurb,
+        status: card.querySelector(".mod-status")?.textContent || mod.status,
+      });
+      log(`open module ${id}`);
+      return;
+    }
+
+    // data-action buttons (crypto / exchange)
+    const actionBtn = t.closest("[data-action]");
+    if (actionBtn) {
+      const action = actionBtn.getAttribute("data-action");
+      const actions = {
+        "crypto-scan": () => cryptoCli(["scan", "--limit", "12"]),
+        "crypto-status": () => cryptoCli(["status"]),
+        "crypto-scorecard": () => cryptoCli(["scorecard"]),
+        "crypto-hub": () => cryptoCli(["hub"]),
+        "crypto-reset-book": () => resetCryptoBook(),
+        "ex-scan": () => exchangeCli(["scan"]),
+        "ex-signals": () => exchangeCli(["signals"]),
+        "ex-status": () => exchangeCli(["status"]),
+        "ex-buy-btc": () => exchangeCli(["paper-buy", "BTC", "--size", "10"]),
+      };
+      if (actions[action]) {
+        ev.preventDefault();
+        actions[action]();
+        return;
+      }
+    }
+  });
+
+  // US tabs only (data-tab without data-mod)
+  document.querySelectorAll(".tab[data-tab]").forEach((btn) => {
+    if (btn.classList.contains("mod-tab")) return;
+    btn.onclick = () => switchTab(btn.dataset.tab);
+  });
+  // Path C/D module tabs
+  document.querySelectorAll(".mod-tab").forEach((btn) => {
+    btn.onclick = () => switchModTab(btn.dataset.mod, btn.dataset.mtab);
+  });
+
+  const bind = (id, fn) => {
+    const el = $(id);
+    if (el) el.onclick = fn;
+  };
+
+  bind("btnHomeFromUs", () => switchView("home"));
+  bind("btnHomeFromCrypto", () => switchView("home"));
+  bind("btnHomeFromExchange", () => switchView("home"));
+  bind("btnHomeFromPlanned", () => switchView("home"));
+
+  // Path C session + one-shots + monitor
+  bind("btnCryptoCont", () => startCryptoSession(null));
+  bind("btnCryptoStop", () => stopCryptoSession());
+  bind("btnCryptoResetBook", () => resetCryptoBook());
+  bind("btnCryptoRefreshLog", () => refreshCryptoMonitor());
+  bind("btnCryptoGoMon", () => switchModTab("crypto", "monitor"));
+  bind("btnCryptoMonScore", () => loadCryptoScorecard());
+  bind("btnCryptoMonSig", () => loadCryptoSignalsPanel());
+  document.querySelectorAll(".crypto-session-btn").forEach((btn) => {
+    btn.onclick = () => startCryptoSession(Number(btn.dataset.polls) || 20);
+  });
+  bind("btnCryptoOnce", () => cryptoCli(["scan", "--limit", "12"]));
+  bind("btnCryptoStatus", () => cryptoCli(["status"]));
+  bind("btnCryptoScore", () => cryptoCli(["scorecard"]));
+  bind("btnCryptoHub", () => cryptoCli(["hub"]));
+
+  // Path D session + one-shots + monitor
+  bind("btnExCont", () => startExchangeSession(null));
+  bind("btnExStop", () => stopExchangeSession());
+  bind("btnExRefreshLog", () => refreshExchangeMonitor());
+  bind("btnExGoMon", () => switchModTab("exchange", "monitor"));
+  bind("btnExMonScan", async () => {
+    const out = $("exMonQuotes");
+    if (out) setLoading(out, "Scanning quotes…");
+    try {
+      const t = await getInvoke()("exchange_cli_cmd", { args: ["scan"] });
+      if (out) out.textContent = t;
+    } catch (e) {
+      if (out) out.textContent = String(e);
+    }
+  });
+  bind("btnExMonSig", async () => {
+    const out = $("exMonSig");
+    if (out) setLoading(out, "Loading signals…");
+    try {
+      const t = await getInvoke()("exchange_cli_cmd", { args: ["signals"] });
+      if (out) out.textContent = t;
+    } catch (e) {
+      if (out) out.textContent = String(e);
+    }
+  });
+  document.querySelectorAll(".ex-session-btn").forEach((btn) => {
+    btn.onclick = () => startExchangeSession(Number(btn.dataset.polls) || 20);
+  });
+  bind("btnExScan", () => exchangeCli(["scan"]));
+  bind("btnExSignals", () => exchangeCli(["signals"]));
+  bind("btnExStatus", () => exchangeCli(["status"]));
+  bind("btnExBuy", () => exchangeCli(["paper-buy", "BTC", "--size", "10"]));
+
+  // US desk controls
+  bind("btnStartDash", () => act("start API", () => getInvoke()("start_dashboard")));
+  bind("btnStopDash", () => act("stop API", () => getInvoke()("stop_dashboard")));
+  bind("btnOpenBrowser", () => act("open browser", () => getInvoke()("open_dashboard")));
+  bind("btnOpenBrowser2", () => act("open browser", () => getInvoke()("open_dashboard")));
+  bind("btnStartBotCont", () =>
+    act("start continuous", () => getInvoke()("start_bot", startBotOpts(null))),
+  );
+  bind("btnStopBot", () => act("stop bot", () => getInvoke()("stop_bot")));
+  document.querySelectorAll(".session-btn").forEach((btn) => {
+    btn.onclick = () => {
+      const n = Number(btn.dataset.polls) || 20;
+      act(`session ${n}`, () => getInvoke()("start_bot", startBotOpts(n)));
+    };
+  });
+  bind("btnKill", () => act("kill all", () => getInvoke()("kill_all")));
+  bind("btnGoOps", () => switchTab("ops"));
+  bind("btnGoSettings", () => switchTab("settings"));
+  bind("btnGoMonitor", () => switchTab("monitor"));
+  bind("btnEnsureDash", () => ensureMonitor());
+  bind("btnReloadFrame", () => {
+    frameLoadedForUrl = "";
+    if ($("dashFrame")) $("dashFrame").src = dashUrl(monitorBook);
+  });
+  bind("btnBookPaper", () => {
+    monitorBook = "paper";
+    frameLoadedForUrl = "";
+    setMonitorLive(true);
+  });
+  bind("btnBookLive", () => {
+    monitorBook = "live";
+    frameLoadedForUrl = "";
+    setMonitorLive(true);
+  });
+  bind("btnDoctor", () => runDoctor());
+  bind("btnLogsBot", () => showLogs("bot"));
+  bind("btnLogsDash", () => showLogs("dashboard"));
+  bind("btnLoadKnobs", () => loadKnobs({ force: true }));
+  bind("btnSaveKnobs", () => saveKnobs());
+  bind("btnReadiness", () =>
+    loadReadiness({ force: true }).then(() => log("readiness refreshed")),
+  );
+  bind("btnAccounts", () => loadAccounts({ force: true }));
+  bind("btnDigest", () =>
+    act("digest", async () => {
+      setOpsOut("Running digest…");
+      const t = await getInvoke()("run_digest_cmd", { account: selectedAccount() });
+      setOpsOut(t);
+      return short(t);
+    }),
+  );
+  bind("btnDigestSend", () =>
+    act("digest send", async () => {
+      setOpsOut("Sending digest…");
+      const t = await getInvoke()("run_digest_cmd", {
+        account: selectedAccount(),
+        send: true,
+      });
+      setOpsOut(t);
+      return short(t);
+    }),
+  );
+  bind("btnExport", () =>
+    act("export", async () => {
+      setOpsOut("Exporting…");
+      const t = await getInvoke()("run_export_cmd", {
+        account: selectedAccount(),
+        year: new Date().getFullYear(),
+      });
+      setOpsOut(t);
+      return t;
+    }),
+  );
+  bind("btnSync", () =>
+    act("sync", async () => {
+      setOpsOut("Syncing live positions…");
+      const t = await getInvoke()("sync_positions_cmd", { account: "live" });
+      setOpsOut(t);
+      return short(t);
+    }),
+  );
+  bind("btnHistList", () =>
+    act("history", async () => {
+      if ($("histOut")) $("histOut").textContent = "Loading…";
+      const t = await getInvoke()("list_history_cmd");
+      if ($("histOut")) $("histOut").textContent = t || "(empty)";
+      return "history listed";
+    }),
+  );
+  bind("btnHistRecord", () =>
+    act("record", async () => {
+      if ($("histOut")) $("histOut").textContent = "Recording…";
+      const t = await getInvoke()("record_history_cmd", { source: "mock" });
+      if ($("histOut")) $("histOut").textContent = t;
+      return t;
+    }),
+  );
+  bind("btnSuggest", () => loadSuggest());
+  bind("btnClearBook", () => {
+    if (
+      !confirm(
+        "Delete this account's SQLite book (positions + fills)? Bot should be stopped first.",
+      )
+    ) {
+      return;
+    }
+    act("clear book", () =>
+      getInvoke()("clear_book_cmd", { account: selectedAccount() }),
+    );
+  });
+
+  document.querySelectorAll("[data-cfg]").forEach((btn) => {
+    btn.onclick = () => {
+      if ($("configPath")) $("configPath").value = btn.dataset.cfg;
+      log(`config → ${btn.dataset.cfg}`);
+    };
+  });
+}
+
+// Boot
+wireUi();
+log("Home → US · Crypto Up/Down · Exchange · (Alpaca stretch)");
+renderModuleCards(FALLBACK_MODULES);
+switchView("home");
+setInterval(() => {
+  if (activeView === "us") refresh();
+  if (activeView === "home") loadHub();
+  if (activeView === "crypto") refreshCryptoMonitor({ quietBook: true });
+  if (activeView === "exchange") refreshExchangeMonitor({ quietBook: true });
+}, 4000);

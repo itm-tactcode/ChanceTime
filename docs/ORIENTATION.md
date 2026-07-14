@@ -71,6 +71,12 @@ uv run chancetime digest --account paper
 
 Desktop: **Control → Start API → Start bot (account paper)** → **Monitor** to watch.
 
-Phases **21+** (micro live) and **13** (dual-leg live automation) are **later**, after scorecard / readiness gates feel boring.
+Phases **21+** (US micro live) and **13** (dual-leg live automation) are **later**, after scorecard / readiness gates feel boring.
 
-More docs: `SCROLL.md` (strategies) · `docs/LIVE_READINESS.md` · `docs/SECURITY.md` · `PROGRESS.md`
+**Path C:** `crypto_updown/` — Gamma/CLOB/spot paper + direction signals → `data/research/signals/`. CLI `chancetime crypto *`.
+
+**Path D:** `crypto_exchange/` — Coinbase public spot paper + optional `--trade-signals` from C. CLI `chancetime exchange *`. See `docs/CRYPTO_VENUES.md`.
+
+**SaaS / multi-tenant:** stretch only — not scheduled.
+
+More docs: `SCROLL.md` (strategies) · `docs/LIVE_READINESS.md` · `docs/SECURITY.md` · `docs/CRYPTO_VENUES.md` · `PROGRESS.md`

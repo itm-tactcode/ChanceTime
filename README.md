@@ -10,14 +10,19 @@ Mini-game flair in logs: fill → **got item** · risk reject → **miss**
 
 ---
 
-## Status (2026-07-13)
+## Status (2026-07-14)
 
 | Area | State |
 |------|--------|
 | Phases **0–12** | Ops stack: multi-book, digests, history, desktop shell |
 | Phases **16–20** | Cost-aware risk, BBO paper, LLM tools, portfolio filters, scorecard |
 | Live path | Signed Kalshi + Polymarket US; micro caps; dual-leg gated |
-| Default strategies | Selective / often flat after harden — **edge not proven** |
+| Default strategies | Selective / often flat after harden — **US dual-list arb unproven** |
+| Research loggers | `data/research/` JSONL (pair gap, TTE, price bands, match quality) |
+| **Multi-module hub** | Home → **US** · **Global Poly crypto** · US crypto exchange (planned) · stocks stretch |
+| Path C Phase 28 | Paper infra: Gamma + CLOB BBO + Coinbase spot + `crypto_paper.db` |
+| Path D (research) | US crypto venues — see [`docs/CRYPTO_VENUES.md`](docs/CRYPTO_VENUES.md) |
+| SaaS / web product | **Stretch only** — not on the active roadmap |
 | GitHub readiness | Structure + docs cleanup; keep secrets local (see [Security](#security)) |
 
 Full history: [`PROGRESS.md`](PROGRESS.md) · agent rules: [`AGENTS.md`](AGENTS.md) · strategies: [`SCROLL.md`](SCROLL.md)
@@ -33,7 +38,8 @@ Full history: [`PROGRESS.md`](PROGRESS.md) · agent rules: [`AGENTS.md`](AGENTS.
 - **LLM** — Grok calibrate / review / rare news brief; durable daily spend ledger; tool call limits
 - **Research** — backtest, walk-forward (costs on), scorecard, market history JSONL
 - **Ops** — digests, tax-oriented CSV export, presets, suggest-settings, doctor, readiness
-- **UI** — FastAPI dashboard (loopback) + optional Tauri desktop control shell
+- **UI** — FastAPI dashboard (loopback) + optional Tauri desktop with **Home hub** (US / crypto modules)
+- **Path C** — Global Polymarket crypto Up/Down paper module (separate DB + CLI)
 
 ---
 
@@ -71,7 +77,25 @@ uv run chancetime strategies --stats
 uv run chancetime scorecard --account paper
 uv run chancetime scan-arb --source mock
 uv run chancetime backtest --grid
-uv run chancetime dashboard               # http://127.0.0.1:8787
+uv run chancetime dashboard               # http://127.0.0.1:8787  (+ /api/hub)
+```
+
+**Path C — global Polymarket crypto Up/Down** (paper-first; [docs.polymarket.com](https://docs.polymarket.com/))
+
+```bash
+uv run chancetime crypto scan --limit 12   # Gamma + CLOB BBO + spot
+uv run chancetime crypto run --once        # publishes C→D signals; no live CLOB
+uv run chancetime crypto status
+uv run chancetime crypto hub               # combined portfolio (US + C + D)
+```
+
+**Path D — US crypto exchange spot paper** (Coinbase public feed; optional Poly signals)
+
+```bash
+uv run chancetime exchange scan
+uv run chancetime exchange run --once
+uv run chancetime exchange signals         # after a crypto run
+uv run chancetime exchange run --once --trade-signals   # paper follow C direction
 ```
 
 **Desktop (optional)** — Linux needs `webkit2gtk-4.1`; see [`desktop/README.md`](desktop/README.md).
