@@ -79,4 +79,4 @@ Phases **21+** (US micro live) and **13** (dual-leg live automation) are **later
 
 **SaaS / multi-tenant:** stretch only — not scheduled.
 
-More docs: `SCROLL.md` (strategies) · `docs/LIVE_READINESS.md` · `docs/SECURITY.md` · `docs/CRYPTO_VENUES.md` · `PROGRESS.md`
+More docs: `SCROLL.md` (strategies) · `docs/LIVE_READINESS.md` · `docs/SECURITY.md` · `docs/CRYPTO_VENUES.md`. Local-only: `AGENTS.md`, `PROGRESS.md` (gitignored).

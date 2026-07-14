@@ -9,8 +9,8 @@ This document is written for **humans who are new to this style of trading**. Yo
 | Doc | What it is |
 |-----|------------|
 | `README.md` | Install / first commands / GitHub layout |
-| `AGENTS.md` | Architecture, phases, safety rules for agents |
-| `PROGRESS.md` | What landed when |
+| `AGENTS.md` | Local architecture notes for agents (gitignored; not on GitHub) |
+| `PROGRESS.md` | Local changelog (gitignored; not on GitHub) |
 | `docs/ORIENTATION.md` | Mental model of bot + desktop |
 | `docs/SECURITY.md` | Secrets, bind exposure, pre-push checks |
 | `docs/LIVE_READINESS.md` | Gates before tiny live |

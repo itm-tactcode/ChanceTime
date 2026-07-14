@@ -25,7 +25,7 @@ Mini-game flair in logs: fill → **got item** · risk reject → **miss**
 | SaaS / web product | **Stretch only** — not on the active roadmap |
 | GitHub readiness | Structure + docs cleanup; keep secrets local (see [Security](#security)) |
 
-Full history: [`PROGRESS.md`](PROGRESS.md) · agent rules: [`AGENTS.md`](AGENTS.md) · strategies: [`SCROLL.md`](SCROLL.md)
+Strategies: [`SCROLL.md`](SCROLL.md). Local-only notes (not in git): `AGENTS.md`, `PROGRESS.md`.
 
 ---
 
@@ -185,8 +185,7 @@ Details: [`docs/SECURITY.md`](docs/SECURITY.md) · live gates: [`docs/LIVE_READI
 |-----|----------|
 | [`docs/ORIENTATION.md`](docs/ORIENTATION.md) | Mental model (bot / desktop / books) |
 | [`SCROLL.md`](SCROLL.md) | Strategy guide for humans |
-| [`AGENTS.md`](AGENTS.md) | Architecture + phases for coding agents |
-| [`PROGRESS.md`](PROGRESS.md) | Changelog of what landed |
+| `AGENTS.md` / `PROGRESS.md` | Local agent notes + changelog (gitignored; not published) |
 | [`docs/VPS_AND_BACKUPS.md`](docs/VPS_AND_BACKUPS.md) | Deploy notes |
 | [`docs/SECURITY.md`](docs/SECURITY.md) | Secrets & exposure hygiene |
 | [`desktop/README.md`](desktop/README.md) | Tauri shell |
