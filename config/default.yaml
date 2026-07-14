@@ -320,3 +320,48 @@ dashboard:
 logging:
   level: INFO
   json_logs: false
+
+# ---------------------------------------------------------------------------
+# Path C / Path D — public baseline only. Personal edge/size/snipe overrides
+# go in gitignored config/user.yaml (see user.yaml.example). Do not commit
+# knobs you treat as proprietary after paper research.
+# ---------------------------------------------------------------------------
+crypto_updown:
+  poll_interval_seconds: 15.0
+  max_markets: 20
+  bbo_limit: 12
+  paper_strategy: false
+  paper_complete_set: false
+  paper_direction: false
+  size_usd: 5.0
+  min_edge: 0.06
+  complete_set_size_usd: 5.0
+  complete_set_max_sum: 0.995
+  max_spread: 0.12
+  snipe_seconds: 90.0
+  snipe_min_p: 0.62
+  snipe_size_usd: 5.0
+  max_usd_per_market_side: 25.0
+  signal_edge_threshold: 0.08
+  fee_bps: 50.0
+  max_daily_loss_usd: 50.0
+  max_spot_age_sec: 90.0
+  use_ws: false
+  publish_signals: true
+  db_path: data/crypto_paper.db
+  starting_cash: 1000.0
+
+crypto_exchange:
+  poll_interval_seconds: 20.0
+  venue: coinbase
+  trade_signals: false
+  signal_size_usd: 25.0
+  min_signal_confidence: 0.65
+  max_signal_age_sec: 180.0
+  max_positions: 4
+  max_notional_per_asset: 100.0
+  max_signal_fills_per_poll: 2
+  fee_bps: 30.0
+  db_path: data/crypto_exchange_paper.db
+  starting_cash: 1000.0
+  consume_signals: true

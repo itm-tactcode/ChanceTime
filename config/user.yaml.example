@@ -119,3 +119,45 @@ strategies:
   match_quality:
     enabled: true
     universe: dual_list
+
+# =============================================================================
+# Path C — Polymarket crypto Up/Down (gitignored when in user.yaml)
+# Put paper-found edge / sizes / snipe thresholds HERE so they are not published.
+# CLI flags still override for one-off runs.
+# =============================================================================
+crypto_updown:
+  poll_interval_seconds: 15.0
+  max_markets: 20
+  bbo_limit: 12
+  # true = paper fills (tweet hybrid); false = shadow eval only
+  paper_strategy: true
+  size_usd: 5.0
+  # --- research knobs (keep local if you find edge) ---
+  min_edge: 0.06
+  complete_set_size_usd: 5.0
+  complete_set_max_sum: 0.995
+  max_spread: 0.12
+  snipe_seconds: 90.0
+  snipe_min_p: 0.62
+  snipe_size_usd: 5.0
+  max_usd_per_market_side: 25.0
+  signal_edge_threshold: 0.08
+  fee_bps: 50.0
+  max_daily_loss_usd: 50.0
+  max_spot_age_sec: 90.0
+  use_ws: false
+  publish_signals: true
+
+# =============================================================================
+# Path D — US crypto exchange paper + optional C signals
+# =============================================================================
+crypto_exchange:
+  poll_interval_seconds: 20.0
+  venue: coinbase
+  trade_signals: false
+  signal_size_usd: 25.0
+  min_signal_confidence: 0.65
+  max_signal_age_sec: 180.0
+  max_positions: 4
+  max_notional_per_asset: 100.0
+  fee_bps: 30.0

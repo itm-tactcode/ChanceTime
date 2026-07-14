@@ -62,6 +62,15 @@ CREATE TABLE IF NOT EXISTS settlements (
     resolved_up INTEGER NOT NULL,
     note TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS window_refs (
+    market_slug TEXT PRIMARY KEY,
+    asset TEXT NOT NULL,
+    ref_price REAL NOT NULL,
+    ref_quality TEXT NOT NULL DEFAULT 'unknown',
+    start_ts REAL,
+    end_ts REAL,
+    updated_ts REAL NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_crypto_eq_ts ON equity_snapshots(ts);
 """
 
@@ -354,6 +363,53 @@ class CryptoPaperStore:
         )
         self._conn.commit()
 
+    def upsert_window_ref(
+        self,
+        *,
+        market_slug: str,
+        asset: str,
+        ref_price: float,
+        ref_quality: str = "unknown",
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> None:
+        """Persist open-print ref so restart can settle after downtime."""
+        self._conn.execute(
+            """INSERT INTO window_refs
+               (market_slug, asset, ref_price, ref_quality, start_ts, end_ts, updated_ts)
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(market_slug) DO UPDATE SET
+                 asset=excluded.asset,
+                 ref_price=excluded.ref_price,
+                 ref_quality=excluded.ref_quality,
+                 start_ts=COALESCE(excluded.start_ts, window_refs.start_ts),
+                 end_ts=COALESCE(excluded.end_ts, window_refs.end_ts),
+                 updated_ts=excluded.updated_ts""",
+            (
+                market_slug,
+                asset,
+                ref_price,
+                ref_quality,
+                start_ts,
+                end_ts,
+                time.time(),
+            ),
+        )
+        self._conn.commit()
+
+    def load_window_refs(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """SELECT market_slug, asset, ref_price, ref_quality, start_ts, end_ts
+               FROM window_refs"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_window_ref(self, market_slug: str) -> None:
+        self._conn.execute(
+            "DELETE FROM window_refs WHERE market_slug = ?", (market_slug,)
+        )
+        self._conn.commit()
+
     def reset_book(self, *, starting_cash: float | None = None) -> dict[str, Any]:
         """Wipe fills, positions, settlements, snapshots; restore cash.
 
@@ -365,6 +421,7 @@ class CryptoPaperStore:
         self._conn.execute("DELETE FROM positions")
         self._conn.execute("DELETE FROM settlements")
         self._conn.execute("DELETE FROM equity_snapshots")
+        self._conn.execute("DELETE FROM window_refs")
         self._conn.execute("DELETE FROM book_meta")
         self._conn.execute(
             """INSERT INTO book_meta (id, cash, starting_cash, realized_pnl, updated_ts)

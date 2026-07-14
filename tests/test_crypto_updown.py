@@ -162,15 +162,138 @@ def test_paper_settle_on_resolution() -> None:
     assert not book.positions
 
 
-def test_slug_window_end() -> None:
+def test_slug_window_bounds() -> None:
     from datetime import UTC, datetime
 
-    from chancetime.crypto_updown.gamma import _end_from_slug
+    from chancetime.crypto_updown.gamma import (
+        _end_from_slug,
+        _start_from_slug,
+        asset_from_slug,
+        resolved_up_from_event,
+        window_bounds_from_slug,
+    )
 
-    dt = _end_from_slug("btc-updown-5m-1784145600")
-    assert dt is not None
-    assert dt == datetime.fromtimestamp(1784145600, tz=UTC)
-    assert _end_from_slug("not-a-slug") is None
+    start = 1784145600
+    assert _start_from_slug(f"btc-updown-5m-{start}") == datetime.fromtimestamp(
+        start, tz=UTC
+    )
+    # end = start + 5m
+    assert _end_from_slug(f"btc-updown-5m-{start}") == datetime.fromtimestamp(
+        start + 300, tz=UTC
+    )
+    assert window_bounds_from_slug(f"btc-updown-5m-{start}") == (
+        float(start),
+        float(start + 300),
+    )
+    assert window_bounds_from_slug(f"eth-updown-15m-{start}") == (
+        float(start),
+        float(start + 900),
+    )
+    assert window_bounds_from_slug("not-a-slug") is None
+    assert asset_from_slug("btc-updown-5m-1") == "BTC"
+    assert asset_from_slug("hype-updown-5m-1") == "HYPE"
+
+    closed_up = {
+        "closed": True,
+        "markets": [
+            {
+                "closed": True,
+                "outcomes": '["Up", "Down"]',
+                "outcomePrices": '["1", "0"]',
+            }
+        ],
+    }
+    closed_down = {
+        "closed": True,
+        "markets": [
+            {
+                "closed": True,
+                "outcomes": '["Up", "Down"]',
+                "outcomePrices": '["0", "1"]',
+            }
+        ],
+    }
+    assert resolved_up_from_event(closed_up) is True
+    assert resolved_up_from_event(closed_down) is False
+    assert resolved_up_from_event({"closed": False, "markets": []}) is None
+
+
+def test_window_refs_persist_and_reload(tmp_path) -> None:
+    from chancetime.crypto_updown.store import CryptoPaperStore
+
+    db = tmp_path / "crypto_paper.db"
+    s = CryptoPaperStore(db, starting_cash=1000.0)
+    s.upsert_window_ref(
+        market_slug="btc-updown-5m-1784064600",
+        asset="BTC",
+        ref_price=64000.0,
+        ref_quality="near_open",
+        start_ts=1784064600.0,
+        end_ts=1784064900.0,
+    )
+    rows = s.load_window_refs()
+    assert len(rows) == 1
+    assert rows[0]["ref_price"] == 64000.0
+    s.delete_window_ref("btc-updown-5m-1784064600")
+    assert s.load_window_refs() == []
+    s.close()
+
+
+def test_restart_reconcile_settles_expired_position(tmp_path) -> None:
+    """Offline expiry: open position + Gamma closed outcome → settle on check."""
+    import asyncio
+
+    from chancetime.crypto_updown.bot import CryptoUpDownBot
+    from chancetime.crypto_updown.paper import PaperPosition
+    from chancetime.crypto_updown.store import CryptoPaperStore
+
+    start = 1_700_000_000  # fixed past epoch
+    slug = f"btc-updown-5m-{start}"
+    db = tmp_path / "crypto_paper.db"
+    store = CryptoPaperStore(db, starting_cash=1000.0)
+    # Simulate spent cash + open Up bag (entry 0.50 → 10 contracts on $5)
+    store.set_cash(994.975)
+    store.upsert_position(
+        market_slug=slug,
+        side="up",
+        size_usd=5.0,
+        entry_price=0.5,
+        contracts=10.0,
+        fees_paid=0.025,
+    )
+    store.close()
+
+    bot = CryptoUpDownBot(db_path=str(db), cash=1000.0, enrich_bbo=False)
+    # Position loaded from store
+    assert (slug, "up") in bot.book.positions
+    assert bot.book.cash < 1000.0
+
+    async def fake_event(_s: str):
+        return {
+            "closed": True,
+            "markets": [
+                {
+                    "closed": True,
+                    "outcomes": '["Up", "Down"]',
+                    "outcomePrices": '["1", "0"]',
+                }
+            ],
+        }
+
+    bot.gamma.fetch_event_by_slug = fake_event  # type: ignore[method-assign]
+
+    async def run() -> None:
+        res = await bot._check_resolutions([], {})
+        assert any(r["slug"] == slug for r in res)
+        assert (slug, "up") not in bot.book.positions
+        # 10 contracts * $1 payout
+        assert bot.book.cash > 994.0
+        assert bot.store.summary()["settlements_total"] >= 1
+
+    try:
+        asyncio.run(run())
+    finally:
+        asyncio.run(bot.close())
 
 
 def test_clob_apply_book() -> None:

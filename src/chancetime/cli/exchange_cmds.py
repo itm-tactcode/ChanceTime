@@ -23,32 +23,64 @@ def register(app: typer.Typer) -> None:
     def exchange_run(
         once: Annotated[bool, typer.Option("--once")] = False,
         max_polls: Annotated[int | None, typer.Option("--max-polls")] = None,
-        interval: Annotated[float, typer.Option("--interval")] = 20.0,
+        interval: Annotated[
+            float | None,
+            typer.Option("--interval", help="Default: crypto_exchange.poll_interval_seconds"),
+        ] = None,
         venue: Annotated[
-            str,
-            typer.Option("--venue", help="coinbase (price feed) | robinhood (label; prices via CB)"),
-        ] = "coinbase",
+            str | None,
+            typer.Option(
+                "--venue",
+                help="coinbase | robinhood label (default: config)",
+            ),
+        ] = None,
         trade_signals: Annotated[
-            bool,
+            bool | None,
             typer.Option(
                 "--trade-signals/--no-trade-signals",
-                help="Paper-trade on Path C implied-direction signals",
+                help="Paper-trade on Path C signals (default: config)",
             ),
-        ] = False,
-        size: Annotated[float, typer.Option("--size", help="USD per signal trade")] = 25.0,
-        min_conf: Annotated[float, typer.Option("--min-confidence")] = 0.65,
-        log_level: Annotated[str, typer.Option("--log-level")] = "INFO",
+        ] = None,
+        size: Annotated[
+            float | None,
+            typer.Option("--size", help="USD per signal trade (default: config)"),
+        ] = None,
+        min_conf: Annotated[
+            float | None,
+            typer.Option("--min-confidence", help="Default: config"),
+        ] = None,
+        log_level: Annotated[str | None, typer.Option("--log-level")] = None,
     ) -> None:
-        """Paper poll: spot quotes + optional Poly→exchange signal fills. No live orders."""
-        setup_logging(log_level)
+        """Paper poll: knobs from default.yaml ← user.yaml; CLI overrides. No live orders."""
         from chancetime.crypto_exchange.bot import ExchangeBot
+        from chancetime.utils.config import load_config
+
+        cfg = load_config()
+        d = cfg.crypto_exchange
+        setup_logging(log_level or cfg.logging.level)
 
         bot = ExchangeBot(
-            poll_interval=interval,
-            venue=venue,
-            trade_on_signals=trade_signals,
-            signal_size_usd=size,
-            min_signal_confidence=min_conf,
+            poll_interval=float(
+                interval if interval is not None else d.poll_interval_seconds
+            ),
+            venue=str(venue if venue is not None else d.venue),
+            db_path=d.db_path,
+            cash=d.starting_cash,
+            fee_bps=d.fee_bps,
+            consume_signals=d.consume_signals,
+            trade_on_signals=bool(
+                trade_signals if trade_signals is not None else d.trade_signals
+            ),
+            signal_size_usd=float(
+                size if size is not None else d.signal_size_usd
+            ),
+            min_signal_confidence=float(
+                min_conf if min_conf is not None else d.min_signal_confidence
+            ),
+            max_signal_age_sec=d.max_signal_age_sec,
+            max_positions=d.max_positions,
+            max_notional_per_asset=d.max_notional_per_asset,
+            max_signal_fills_per_poll=d.max_signal_fills_per_poll,
         )
         polls = 1 if once else max_polls
         try:

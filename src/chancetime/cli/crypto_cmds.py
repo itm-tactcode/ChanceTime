@@ -26,68 +26,118 @@ def register(app: typer.Typer) -> None:
             int | None,
             typer.Option("--max-polls", help="Stop after N polls"),
         ] = None,
-        interval: Annotated[float, typer.Option("--interval", help="Seconds between polls")] = 15.0,
-        limit: Annotated[int, typer.Option("--limit", help="Max Up/Down markets")] = 20,
-        bbo_limit: Annotated[int, typer.Option("--bbo-limit")] = 12,
+        interval: Annotated[
+            float | None,
+            typer.Option("--interval", help="Seconds between polls (default: user.yaml / default.yaml)"),
+        ] = None,
+        limit: Annotated[
+            int | None,
+            typer.Option("--limit", help="Max Up/Down markets (default: config)"),
+        ] = None,
+        bbo_limit: Annotated[
+            int | None, typer.Option("--bbo-limit", help="Markets with BBO enrich (default: config)")
+        ] = None,
         complete_set: Annotated[
-            bool,
+            bool | None,
             typer.Option(
-                "--paper-complete-set",
-                help="Paper-buy both sides when ask_up+ask_down < 1 (requires BBO+spot)",
+                "--paper-complete-set/--no-paper-complete-set",
+                help="Paper-buy both sides when ask_up+ask_down < 1 (default: config)",
             ),
-        ] = False,
-        size: Annotated[float, typer.Option("--size", help="USD for complete-set package")] = 5.0,
+        ] = None,
+        size: Annotated[
+            float | None,
+            typer.Option("--size", help="USD size for strategy legs (default: config)"),
+        ] = None,
         direction: Annotated[
-            bool,
+            bool | None,
             typer.Option(
-                "--paper-direction",
-                help="Legacy: paper-buy favored side on CLOB lean only",
+                "--paper-direction/--no-paper-direction",
+                help="Legacy: paper-buy favored side on CLOB lean only (default: config)",
             ),
-        ] = False,
+        ] = None,
         direction_size: Annotated[
-            float, typer.Option("--direction-size", help="USD per direction paper fill")
-        ] = 5.0,
+            float | None,
+            typer.Option("--direction-size", help="USD per direction paper fill (default: size)"),
+        ] = None,
         paper_strategy: Annotated[
-            bool,
+            bool | None,
             typer.Option(
                 "--paper-strategy/--shadow-strategy",
                 help=(
-                    "Run tweet hybrid strategy (mispricing + complete-set + snipe). "
-                    "Default shadow = evaluate/log only, no paper fills."
+                    "Tweet hybrid paper fills vs shadow. "
+                    "Default from config/user.yaml crypto_updown.paper_strategy."
                 ),
             ),
-        ] = False,
+        ] = None,
         strategy_edge: Annotated[
-            float,
-            typer.Option("--strategy-edge", help="Min model vs market edge for mispricing leg"),
-        ] = 0.06,
+            float | None,
+            typer.Option(
+                "--strategy-edge",
+                help="Min model vs market edge (prefer user.yaml crypto_updown.min_edge)",
+            ),
+        ] = None,
         use_ws: Annotated[
-            bool,
-            typer.Option("--ws/--no-ws", help="Optional CLOB market WebSocket (Phase 28)"),
-        ] = False,
+            bool | None,
+            typer.Option("--ws/--no-ws", help="Optional CLOB market WebSocket (default: config)"),
+        ] = None,
         no_signals: Annotated[
             bool,
             typer.Option("--no-signals", help="Do not publish C→D direction signals"),
         ] = False,
-        log_level: Annotated[str, typer.Option("--log-level")] = "INFO",
+        log_level: Annotated[str | None, typer.Option("--log-level")] = None,
     ) -> None:
-        """Paper scan loop: tweet hybrid Up/Down (shadow by default). No live CLOB orders."""
-        setup_logging(log_level)
+        """Paper scan loop: knobs from default.yaml ← user.yaml; CLI overrides. No live CLOB."""
         from chancetime.crypto_updown.bot import CryptoUpDownBot
+        from chancetime.crypto_updown.strategies import TweetStrategyConfig
+        from chancetime.utils.config import load_config
 
+        cfg = load_config()
+        c = cfg.crypto_updown
+        setup_logging(log_level or cfg.logging.level)
+
+        size_usd = float(size if size is not None else c.size_usd)
+        edge = float(strategy_edge if strategy_edge is not None else c.min_edge)
+        strat_cfg = TweetStrategyConfig(
+            min_edge=edge,
+            size_usd=size_usd,
+            complete_set_max_sum=c.complete_set_max_sum,
+            complete_set_size_usd=float(
+                size if size is not None else c.complete_set_size_usd
+            ),
+            max_spread=c.max_spread,
+            snipe_seconds=c.snipe_seconds,
+            snipe_min_p=c.snipe_min_p,
+            snipe_size_usd=float(size if size is not None else c.snipe_size_usd),
+            max_usd_per_market_side=c.max_usd_per_market_side,
+            signal_edge_threshold=c.signal_edge_threshold,
+        )
         bot = CryptoUpDownBot(
-            poll_interval=interval,
-            max_markets=limit,
-            bbo_limit=bbo_limit,
-            paper_trade_complete_set=complete_set,
-            complete_set_size_usd=size,
-            paper_trade_direction=direction,
-            direction_size_usd=direction_size,
-            paper_strategy=paper_strategy,
-            strategy_size_usd=size,
-            strategy_min_edge=strategy_edge,
-            publish_direction_signals=not no_signals,
-            use_ws=use_ws,
+            poll_interval=float(interval if interval is not None else c.poll_interval_seconds),
+            max_markets=int(limit if limit is not None else c.max_markets),
+            bbo_limit=int(bbo_limit if bbo_limit is not None else c.bbo_limit),
+            db_path=c.db_path,
+            cash=c.starting_cash,
+            paper_trade_complete_set=bool(
+                complete_set if complete_set is not None else c.paper_complete_set
+            ),
+            complete_set_size_usd=strat_cfg.complete_set_size_usd,
+            paper_trade_direction=bool(
+                direction if direction is not None else c.paper_direction
+            ),
+            direction_size_usd=float(
+                direction_size if direction_size is not None else size_usd
+            ),
+            paper_strategy=bool(
+                paper_strategy if paper_strategy is not None else c.paper_strategy
+            ),
+            strategy_config=strat_cfg,
+            publish_direction_signals=(
+                False if no_signals else bool(c.publish_signals)
+            ),
+            fee_bps=c.fee_bps,
+            use_ws=bool(use_ws if use_ws is not None else c.use_ws),
+            max_daily_loss_usd=c.max_daily_loss_usd,
+            max_spot_age_sec=c.max_spot_age_sec,
         )
         polls = 1 if once else max_polls
         try:

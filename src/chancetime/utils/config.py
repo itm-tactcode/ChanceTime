@@ -412,6 +412,61 @@ class LoggingSettings(BaseModel):
     json_logs: bool = False
 
 
+class CryptoUpDownSettings(BaseModel):
+    """Path C — global Polymarket crypto Up/Down (paper-first).
+
+    **Sensitive knobs** (edge, sizes, snipe thresholds) belong in gitignored
+    ``config/user.yaml`` under ``crypto_updown:``, not committed defaults you
+    consider proprietary after paper discovery.
+    """
+
+    poll_interval_seconds: float = 15.0
+    max_markets: int = 20
+    bbo_limit: int = 12
+    # Default shadow: evaluate/log only. Enable paper fills in user.yaml or CLI.
+    paper_strategy: bool = False
+    paper_complete_set: bool = False
+    paper_direction: bool = False
+    size_usd: float = 5.0
+    min_edge: float = 0.06
+    complete_set_size_usd: float = 5.0
+    complete_set_max_sum: float = 0.995
+    max_spread: float = 0.12
+    snipe_seconds: float = 90.0
+    snipe_min_p: float = 0.62
+    snipe_size_usd: float = 5.0
+    max_usd_per_market_side: float = 25.0
+    signal_edge_threshold: float = 0.08
+    fee_bps: float = 50.0
+    max_daily_loss_usd: float = 50.0
+    max_spot_age_sec: float = 90.0
+    use_ws: bool = False
+    publish_signals: bool = True
+    db_path: str = "data/crypto_paper.db"
+    starting_cash: float = 1000.0
+
+
+class CryptoExchangeSettings(BaseModel):
+    """Path D — US crypto exchange spot paper + optional C→D signals.
+
+    Size/confidence and risk caps: put personal values in ``user.yaml``.
+    """
+
+    poll_interval_seconds: float = 20.0
+    venue: str = "coinbase"
+    trade_signals: bool = False
+    signal_size_usd: float = 25.0
+    min_signal_confidence: float = 0.65
+    max_signal_age_sec: float = 180.0
+    max_positions: int = 4
+    max_notional_per_asset: float = 100.0
+    max_signal_fills_per_poll: int = 2
+    fee_bps: float = 30.0
+    db_path: str = "data/crypto_exchange_paper.db"
+    starting_cash: float = 1000.0
+    consume_signals: bool = True
+
+
 class AppConfig(BaseModel):
     """Merged application configuration."""
 
@@ -426,6 +481,10 @@ class AppConfig(BaseModel):
     persistence: PersistenceSettings = Field(default_factory=PersistenceSettings)
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    crypto_updown: CryptoUpDownSettings = Field(default_factory=CryptoUpDownSettings)
+    crypto_exchange: CryptoExchangeSettings = Field(
+        default_factory=CryptoExchangeSettings
+    )
 
     # Secrets / env-only (never from YAML)
     xai_api_key: str | None = None

@@ -52,6 +52,7 @@ class CryptoUpDownBot:
         paper_strategy: bool = False,
         strategy_size_usd: float = 5.0,
         strategy_min_edge: float = 0.06,
+        strategy_config: TweetStrategyConfig | None = None,
         publish_direction_signals: bool = True,
         fee_bps: float = 50.0,
         use_ws: bool = False,
@@ -89,14 +90,16 @@ class CryptoUpDownBot:
         self.direction_min_confidence = direction_min_confidence
         self.paper_strategy = paper_strategy
         self.publish_direction_signals = publish_direction_signals
-        self.strategy = TweetHybridStrategy(
-            TweetStrategyConfig(
+        if strategy_config is not None:
+            scfg = strategy_config
+        else:
+            scfg = TweetStrategyConfig(
                 size_usd=strategy_size_usd,
                 snipe_size_usd=strategy_size_usd,
                 complete_set_size_usd=complete_set_size_usd,
                 min_edge=strategy_min_edge,
             )
-        )
+        self.strategy = TweetHybridStrategy(scfg)
         self.kill_cfg = KillSwitchConfig(
             max_daily_loss_usd=max_daily_loss_usd,
             max_spot_age_sec=max_spot_age_sec,
@@ -110,10 +113,11 @@ class CryptoUpDownBot:
         self._window_refs: dict[str, float] = {}
         # slug → late_join if first sight not near open
         self._window_ref_quality: dict[str, str] = {}
-        # slug → {asset, end_ts} for resolution after market drops from list
+        # slug → {asset, end_ts, start_ts} for resolution after market drops from list
         self._window_meta: dict[str, dict[str, Any]] = {}
-        # slug → already logged resolution
+        # slug → already logged resolution (this process)
         self._resolved: set[str] = set()
+        self._load_persisted_window_refs()
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -168,15 +172,16 @@ class CryptoUpDownBot:
                 spot_ages[a] = 0.0
 
         # Capture window reference (step 1) — prefer near-open sightings
-        from chancetime.crypto_updown.gamma import _end_from_slug
+        from chancetime.crypto_updown.gamma import window_bounds_from_slug
 
         for m in markets:
             px = spots.get(m.asset)
             end_ts = m.window_end.timestamp() if m.window_end else None
-            se = _end_from_slug(m.slug)
-            if se is not None:
-                end_ts = se.timestamp()
             start_ts = m.window_start.timestamp() if m.window_start else None
+            bounds = window_bounds_from_slug(m.slug)
+            if bounds is not None:
+                start_ts = bounds[0]
+                end_ts = bounds[1]
             if m.slug not in self._window_meta:
                 self._window_meta[m.slug] = {
                     "asset": m.asset,
@@ -192,18 +197,17 @@ class CryptoUpDownBot:
                 continue
             if m.slug not in self._window_refs:
                 quality = self._ref_quality(m)
-                self._window_refs[m.slug] = px
-                self._window_ref_quality[m.slug] = quality
-                log.info(
-                    "window_ref_set",
-                    slug=m.slug,
+                self._set_window_ref(
+                    m.slug,
+                    asset=str(m.asset),
                     ref=px,
-                    asset=m.asset,
                     quality=quality,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
                 )
 
-        # Log resolutions when windows expire (spot vs ref → Up if spot >= ref)
-        resolutions = self._check_resolutions(markets, spots)
+        # Resolutions: live tracked windows + any expired open positions (restart-safe)
+        resolutions = await self._check_resolutions(markets, spots)
 
         # Kill switches (before strategy paper fills)
         equity_pre = self.book.mark_equity(markets)
@@ -528,50 +532,175 @@ class CryptoUpDownBot:
                 fees_paid=pos.fees_paid,
             )
 
-    def _check_resolutions(
+    def _load_persisted_window_refs(self) -> None:
+        """Hydrate in-memory refs/meta from SQLite (survives process restart)."""
+        from chancetime.crypto_updown.gamma import asset_from_slug, window_bounds_from_slug
+
+        n = 0
+        for row in self.store.load_window_refs():
+            slug = str(row["market_slug"])
+            asset = str(row.get("asset") or asset_from_slug(slug) or "")
+            ref = float(row["ref_price"])
+            if not slug or ref <= 0:
+                continue
+            self._window_refs[slug] = ref
+            self._window_ref_quality[slug] = str(row.get("ref_quality") or "unknown")
+            start_ts = row.get("start_ts")
+            end_ts = row.get("end_ts")
+            bounds = window_bounds_from_slug(slug)
+            if bounds is not None:
+                start_ts = bounds[0] if start_ts is None else start_ts
+                end_ts = bounds[1] if end_ts is None else end_ts
+            self._window_meta[slug] = {
+                "asset": asset or None,
+                "start_ts": float(start_ts) if start_ts is not None else None,
+                "end_ts": float(end_ts) if end_ts is not None else None,
+            }
+            n += 1
+        if n:
+            log.info("window_refs_loaded", count=n)
+
+    def _set_window_ref(
+        self,
+        slug: str,
+        *,
+        asset: str,
+        ref: float,
+        quality: str,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> None:
+        self._window_refs[slug] = ref
+        self._window_ref_quality[slug] = quality
+        meta = self._window_meta.setdefault(slug, {})
+        meta["asset"] = asset
+        if start_ts is not None:
+            meta["start_ts"] = start_ts
+        if end_ts is not None:
+            meta["end_ts"] = end_ts
+        self.store.upsert_window_ref(
+            market_slug=slug,
+            asset=asset,
+            ref_price=ref,
+            ref_quality=quality,
+            start_ts=start_ts if start_ts is not None else meta.get("start_ts"),
+            end_ts=end_ts if end_ts is not None else meta.get("end_ts"),
+        )
+        log.info(
+            "window_ref_set",
+            slug=slug,
+            ref=ref,
+            asset=asset,
+            quality=quality,
+        )
+
+    def _candidate_resolve_slugs(self) -> set[str]:
+        """Tracked windows + any open paper inventory (for offline catch-up)."""
+        slugs = set(self._window_refs)
+        slugs.update(self._window_meta)
+        for slug, _side in self.book.positions:
+            slugs.add(slug)
+        return slugs
+
+    def _window_end_ts(self, slug: str, market: Any | None = None) -> float | None:
+        from chancetime.crypto_updown.gamma import window_bounds_from_slug
+
+        bounds = window_bounds_from_slug(slug)
+        if bounds is not None:
+            return bounds[1]
+        meta = self._window_meta.get(slug, {})
+        if meta.get("end_ts") is not None:
+            return float(meta["end_ts"])
+        if market is not None and market.window_end is not None:
+            return market.window_end.timestamp()
+        return None
+
+    async def _resolve_outcome(
+        self,
+        slug: str,
+        *,
+        asset: str | None,
+        ref: float | None,
+        spots: dict[str, float],
+        markets: list[Any],
+    ) -> tuple[bool | None, float | None, str]:
+        """Return (resolved_up, resolve_spot, method). Prefer Gamma settle, else spot vs ref."""
+        from chancetime.crypto_updown.gamma import resolved_up_from_event
+
+        # 1) Official / closed market prices from Gamma (best after downtime)
+        try:
+            event = await self.gamma.fetch_event_by_slug(slug)
+        except Exception as exc:  # noqa: BLE001 — network; fall through
+            log.warning("resolve_gamma_error", slug=slug, error=str(exc))
+            event = None
+        if event is not None:
+            gamma_up = resolved_up_from_event(event)
+            if gamma_up is not None:
+                return gamma_up, None, "gamma_outcome"
+
+        # 2) Spot vs first-seen open ref (in-session paper rule)
+        px = spots.get(str(asset)) if asset else None
+        if px is None and asset:
+            for mm in markets:
+                if mm.asset == asset and spots.get(mm.asset) is not None:
+                    px = spots[mm.asset]
+                    break
+        if px is None and asset:
+            tick = await self.spot.get_price(str(asset))
+            if tick is not None and tick.price > 0:
+                px = tick.price
+        if ref is not None and ref > 0 and px is not None and px > 0:
+            return px >= ref, px, "spot_vs_ref"
+
+        if px is None:
+            log.warning("resolve_skip_no_spot", slug=slug, asset=asset, has_ref=ref is not None)
+        elif ref is None:
+            log.warning("resolve_skip_no_ref_or_gamma", slug=slug, asset=asset)
+        return None, px, "unresolved"
+
+    async def _check_resolutions(
         self,
         markets: list[Any],
         spots: dict[str, float],
     ) -> list[dict[str, Any]]:
-        """When a tracked window has ended, settle paper + log resolution.
+        """When a window has ended, settle paper + log resolution.
 
-        Window end prefers slug unix (5m/15m). Outcome: spot >= open ref → Up.
+        Restart-safe: also walks open positions whose windows expired offline.
+        Window end = slug start + 5m/15m. Outcome: Gamma closed prices if known,
+        else spot >= open ref → Up.
         """
+        from chancetime.crypto_updown.gamma import asset_from_slug, window_bounds_from_slug
+
         now = time.time()
         out: list[dict[str, Any]] = []
         by_slug = {m.slug: m for m in markets}
-        # Also resolve refs whose markets left the active list
-        for slug, ref in list(self._window_refs.items()):
+
+        for slug in sorted(self._candidate_resolve_slugs()):
             if slug in self._resolved:
                 continue
-            meta = self._window_meta.get(slug, {})
             m = by_slug.get(slug)
-            asset = (m.asset if m else None) or meta.get("asset")
-            end_ts = meta.get("end_ts")
-            if m is not None and m.window_end is not None:
-                end_ts = m.window_end.timestamp()
-            # Slug always authoritative if parseable
-            from chancetime.crypto_updown.gamma import _end_from_slug
-
-            slug_end = _end_from_slug(slug)
-            if slug_end is not None:
-                end_ts = slug_end.timestamp()
+            meta = self._window_meta.get(slug, {})
+            asset = (
+                (m.asset if m else None)
+                or meta.get("asset")
+                or asset_from_slug(slug)
+            )
+            end_ts = self._window_end_ts(slug, m)
             if end_ts is None or now < float(end_ts) + 1.0:
                 continue
             if not asset:
+                log.warning("resolve_skip_no_asset", slug=slug)
                 continue
-            px = spots.get(str(asset))
-            if px is None:
-                # Try last known asset price from any open market same asset
-                for mm in markets:
-                    if mm.asset == asset and spots.get(mm.asset) is not None:
-                        px = spots[mm.asset]
-                        break
-            if px is None:
-                log.warning("resolve_skip_no_spot", slug=slug, asset=asset)
+
+            ref = self._window_refs.get(slug)
+            resolved_up, px, method = await self._resolve_outcome(
+                slug, asset=str(asset), ref=ref, spots=spots, markets=markets
+            )
+            if resolved_up is None:
                 continue
-            resolved_up = px >= ref
+
             settles = self.book.settle_market(slug, resolved_up=resolved_up)
+            settle_note = method
             for srow in settles:
                 self.store.record_settlement(
                     market_slug=slug,
@@ -580,10 +709,13 @@ class CryptoUpDownBot:
                     payout=srow["payout"],
                     pnl=srow["pnl"],
                     resolved_up=resolved_up,
-                    note="spot_vs_ref",
+                    note=settle_note,
                 )
-            self.store.clear_positions_for_slug(slug)
-            self.store.set_cash(self.book.cash, realized_pnl=self.book.realized_pnl)
+            if settles:
+                self.store.clear_positions_for_slug(slug)
+                self.store.set_cash(self.book.cash, realized_pnl=self.book.realized_pnl)
+            self.store.delete_window_ref(slug)
+            bounds = window_bounds_from_slug(slug)
             row = {
                 "ts": now,
                 "slug": slug,
@@ -593,13 +725,18 @@ class CryptoUpDownBot:
                 "resolved_up": resolved_up,
                 "outcome": "Up" if resolved_up else "Down",
                 "end_ts": end_ts,
+                "start_ts": bounds[0] if bounds else meta.get("start_ts"),
                 "settlements": len(settles),
                 "settlement_pnl": sum(s["pnl"] for s in settles),
-                "note": "spot_vs_first_seen_ref_proxy+slug_end",
+                "method": method,
+                "note": f"{method}+slug_window_end",
             }
             out.append(row)
             self._resolved.add(slug)
-            log.info("crypto_updown_resolution", **{k: v for k, v in row.items() if k != "note"})
+            log.info(
+                "crypto_updown_resolution",
+                **{k: v for k, v in row.items() if k != "note"},
+            )
 
         if out:
             self.research_dir.mkdir(parents=True, exist_ok=True)
@@ -608,6 +745,16 @@ class CryptoUpDownBot:
             with path.open("a", encoding="utf-8") as f:
                 for row in out:
                     f.write(json.dumps(row, default=str) + "\n")
+            n_settled = sum(int(r.get("settlements") or 0) for r in out)
+            if n_settled:
+                log.info(
+                    "crypto_updown_reconcile",
+                    resolutions=len(out),
+                    position_settlements=n_settled,
+                    cash=round(self.book.cash, 4),
+                    open_positions=len(self.book.positions),
+                    realized_pnl=round(self.book.realized_pnl, 4),
+                )
         return out
 
     async def run(self, *, max_polls: int | None = None) -> None:
@@ -625,9 +772,11 @@ class CryptoUpDownBot:
             publish_signals=self.publish_direction_signals,
             cash=round(self.book.cash, 4),
             positions=len(self.book.positions),
+            window_refs=len(self._window_refs),
             msg=(
                 "PAPER only — tweet hybrid eval always; "
-                "fills only with --paper-strategy; no live CLOB orders"
+                "fills only with --paper-strategy; no live CLOB orders; "
+                "expired inventory reconciled on poll via Gamma/spot"
             ),
         )
         try:

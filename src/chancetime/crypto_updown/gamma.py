@@ -59,8 +59,19 @@ def _parse_dt(raw: object) -> datetime | None:
         return None
 
 
-def _end_from_slug(slug: str) -> datetime | None:
-    """Parse trailing unix timestamp from updown slug (authoritative window end)."""
+_SLUG_PREFIX_ASSET = {
+    "btc": "BTC",
+    "eth": "ETH",
+    "sol": "SOL",
+    "xrp": "XRP",
+    "doge": "DOGE",
+    "bnb": "BNB",
+    "hype": "HYPE",
+}
+
+
+def _start_from_slug(slug: str) -> datetime | None:
+    """Parse trailing unix timestamp from updown slug (window *start*)."""
     if not slug:
         return None
     tail = slug.rsplit("-", 1)[-1]
@@ -74,6 +85,93 @@ def _end_from_slug(slug: str) -> datetime | None:
     if ts < 1_500_000_000 or ts > 4_000_000_000:
         return None
     return datetime.fromtimestamp(ts, tz=UTC)
+
+
+def _end_from_slug(slug: str) -> datetime | None:
+    """Parse window *end* from updown slug (start unix + 5m/15m duration).
+
+    Historical name kept for callers; trailing epoch is the start, not end.
+    """
+    bounds = window_bounds_from_slug(slug)
+    if bounds is None:
+        return None
+    return datetime.fromtimestamp(bounds[1], tz=UTC)
+
+
+def window_bounds_from_slug(slug: str) -> tuple[float, float] | None:
+    """Return ``(start_ts, end_ts)`` from ``{asset}-updown-{5m|15m}-{start_unix}``."""
+    start_dt = _start_from_slug(slug)
+    if start_dt is None:
+        return None
+    start = start_dt.timestamp()
+    low = slug.lower()
+    if "-15m-" in low:
+        return start, start + 900.0
+    # default 5m (and unknown short windows)
+    return start, start + 300.0
+
+
+def asset_from_slug(slug: str) -> str | None:
+    """Map ``btc-updown-5m-…`` → ``BTC``."""
+    if not slug:
+        return None
+    prefix = slug.split("-", 1)[0].lower()
+    return _SLUG_PREFIX_ASSET.get(prefix)
+
+
+def resolved_up_from_event(event: dict[str, Any]) -> bool | None:
+    """Infer Up win from a Gamma event/market payload when settled.
+
+    Uses outcomePrices near 0/1 on closed markets; returns None if unknown.
+    """
+    markets = event.get("markets")
+    m: dict[str, Any] | None = None
+    if isinstance(markets, list) and markets and isinstance(markets[0], dict):
+        m = markets[0]
+    elif event.get("outcomePrices") is not None or event.get("outcomes") is not None:
+        m = event
+    if m is None:
+        return None
+
+    closed = bool(m.get("closed") or event.get("closed"))
+    prices_raw = m.get("outcomePrices") or m.get("outcome_prices")
+    outcomes_raw = m.get("outcomes")
+    prices: list[float] = []
+    if isinstance(prices_raw, str):
+        try:
+            prices = [float(x) for x in json.loads(prices_raw)]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            prices = []
+    elif isinstance(prices_raw, list):
+        try:
+            prices = [float(x) for x in prices_raw]
+        except (TypeError, ValueError):
+            prices = []
+    outcomes: list[str] = []
+    if isinstance(outcomes_raw, str):
+        try:
+            outcomes = [str(x) for x in json.loads(outcomes_raw)]
+        except json.JSONDecodeError:
+            outcomes = []
+    elif isinstance(outcomes_raw, list):
+        outcomes = [str(x) for x in outcomes_raw]
+
+    if len(prices) >= 2 and outcomes:
+        # Winner has price ~1 after resolve
+        best_i = max(range(len(prices)), key=lambda i: prices[i])
+        if prices[best_i] >= 0.9 or closed:
+            name = outcomes[best_i].lower() if best_i < len(outcomes) else ""
+            if name in {"up", "yes"}:
+                return True
+            if name in {"down", "no"}:
+                return False
+    if len(prices) >= 2 and (closed or max(prices) >= 0.95):
+        # Assume [Up, Down] order when outcomes missing
+        if prices[0] >= 0.9 and prices[1] <= 0.1:
+            return True
+        if prices[1] >= 0.9 and prices[0] <= 0.1:
+            return False
+    return None
 
 
 def is_live_window(
@@ -407,9 +505,7 @@ class GammaClient:
         slug = str(m.get("slug") or (event or {}).get("slug") or cid)
         # Prefer short Gamma window (eventStart → endDate) when duration is 5–60m.
         # Trailing slug unix is the *window start* (not series end).
-        from datetime import timedelta
-
-        slug_start = _end_from_slug(slug)
+        slug_start = _start_from_slug(slug)
         short = (
             start is not None
             and end is not None
